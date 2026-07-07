@@ -2,6 +2,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from itertools import chain, groupby, islice, pairwise
 import json
+from multiprocessing import Pool
 from operator import itemgetter
 from pathlib import Path
 from posixpath import dirname
@@ -27,6 +28,13 @@ class BPE:
         r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     )
 
+    def _count_doc(self, doc: str) -> Counter:
+        doc_occs = Counter()
+        for m in re.finditer(self.PRETOKEN_PAT, doc):
+            match_bytes = m.group().encode("utf-8")
+            doc_occs[tuple(bytes([byte]) for byte in match_bytes)] += 1
+        return doc_occs
+
     def train(
         self, text: str, vocab_size: int, special_tokens: list[str]
     ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
@@ -42,10 +50,9 @@ class BPE:
         # count occurrences of pretokens themselves
         docs = re.split("|".join(map(re.escape, special_tokens)), text)
         pretoken_occs = Counter()
-        for doc in docs:
-            for m in re.finditer(self.PRETOKEN_PAT, doc):
-                match_bytes = m.group().encode("utf-8")
-                pretoken_occs[tuple(bytes([byte]) for byte in match_bytes)] += 1
+        with Pool() as pool:
+            for doc_occs in pool.imap_unordered(self._count_doc, docs, chunksize=10):
+                pretoken_occs += doc_occs
 
         # count occurrences of byte pairs within pretokens, and track the index
         # into each pretoken where each pair occurs, so we can efficiently
@@ -92,7 +99,7 @@ class BPE:
                     continue
                 # inner loops below shadow these
                 t1, t2 = most_common_pair
- 
+
                 # create a new pretoken with the newly merged pair
                 pretoken_merged = list(pretoken_premerge)
                 for i, pair_index in enumerate(sorted(pair_indices)):
@@ -126,17 +133,23 @@ class BPE:
 
 
 if __name__ == "__main__":
-    print('training on "corpus.en"...')
-    dump_path = Path(dirname(__file__)) / "test.json"
+    corpus_path = (
+        Path(dirname(__file__)) / ".." / "data" / "TinyStoriesV2-GPT4-valid.txt"
+    )
+    dump_path = Path(dirname(__file__)) / "tinystoriesv2-valid.json"
+    print(f"reading file {corpus_path.absolute().relative_to(Path.cwd())} ...")
+    corpus_text = corpus_path.read_text()
+    print("training BPE tokenizer...")
     enc, merges = BPE().train(
-        (
-            Path(dirname(__file__)) / ".." / "tests" / "fixtures" / "corpus.en"
-        ).read_text(),
-        vocab_size=300,
+        corpus_text,
+        vocab_size=10_000,
         special_tokens=["<|endoftext|>"],
     )
     enc = {i: tok.decode("utf-8", errors="replace") for i, tok in enc.items()}
-    merges = [(t1.decode("utf-8"), t2.decode("utf-8")) for t1, t2 in merges]
+    merges = [
+        (t1.decode("utf-8", errors="replace"), t2.decode("utf-8", errors="replace"))
+        for t1, t2 in merges
+    ]
     json.dump(
         {"enc": enc, "merges": merges},
         open(dump_path, "w"),

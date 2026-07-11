@@ -133,10 +133,12 @@ class BPE:
 
 
 if __name__ == "__main__":
+    name = "TinyStoriesV2-GPT4-train"
+    # name = "TinyStoriesV2-GPT4-valid"
     corpus_path = (
-        Path(dirname(__file__)) / ".." / "data" / "TinyStoriesV2-GPT4-valid.txt"
+        Path(dirname(__file__)) / ".." / "data" / f"{name}.txt"
     )
-    dump_path = Path(dirname(__file__)) / "tinystoriesv2-valid.json"
+    dump_path = Path(dirname(__file__)) / f"{name}-bpe.json"
     print(f"reading file {corpus_path.absolute().relative_to(Path.cwd())} ...")
     corpus_text = corpus_path.read_text()
     print("training BPE tokenizer...")

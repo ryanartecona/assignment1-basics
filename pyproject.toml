@@ -20,6 +20,7 @@ dependencies = [
     "ty>=0.0.26",
     "ruff>=0.15.8",
     "pytest-profiling>=1.8.1",
+    "py-spy>=0.4.2",
 ]
 
 [build-system]
@@ -32,7 +33,7 @@ module-root = ""
 
 [tool.uv]
 package = true
-python-preference = "managed"
+python-preference = "only-managed"
 
 [tool.pytest.ini_options]
 log_cli = true

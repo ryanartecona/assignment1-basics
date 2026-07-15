@@ -1,25 +1,88 @@
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import chain, groupby, islice, pairwise
 import json
 from multiprocessing import Pool
 from operator import itemgetter
 from pathlib import Path
 from posixpath import dirname
-from typing import Iterable
+from typing import ClassVar, Iterable, Iterator
 import regex as re
 
 
 @dataclass
 class NaiveTokenizer:
-    def encode_iterable(self, str_iter: Iterable[str]) -> list[int]:
-        return [ord(c) for s in str_iter for c in s]
+    vocab: dict[int, bytes]
+    merges: list[tuple[bytes, bytes]]
+    special_tokens: list[str] | None = None
+
+    # derived fields
+    enc: dict[int, bytes] = field(init=False)
+    dec: dict[bytes, int] = field(init=False)
+
+    PRETOKEN_PAT: ClassVar[str] = (
+        r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    )
+
+    def __post_init__(self):
+        next_vocab_index = max(self.vocab.keys())
+        # in case some special tokens are substrings of other special tokens,
+        # sort by length descending so we match the longest one first
+        self.special_tokens = sorted(
+            self.special_tokens or [], key=lambda s: (len(s), s), reverse=True
+        )
+        special_vocab = {
+            i + next_vocab_index: tok.encode("utf-8")
+            for i, tok in enumerate(self.special_tokens)
+        }
+        self.dec = self.vocab | special_vocab
+        self.enc = {b: i for i, b in self.vocab.items()}
+
+    def encode_iterable(self, chunks: Iterable[str]) -> Iterator[int]:
+        for chunk in chunks:
+            # TODO: prepend previous leftover to first doc if we have one, and save last doc as leftover for next chunk
+            docs = re.split(
+                "(" + "|".join(map(re.escape, self.special_tokens or [])) + ")", chunk
+            )
+            for doc in docs:
+                if doc in (self.special_tokens or []):
+                    yield self.enc[doc.encode("utf-8")]
+                    continue
+                # split each doc into pretokens
+                pretokens = [
+                    m.group().encode("utf-8")
+                    for m in re.finditer(self.PRETOKEN_PAT, doc)
+                ]
+                # then apply merges to each pretoken
+                for pretoken in pretokens:
+                    # TODO: check a pretoken cache to avoid redundantly processing the same pretoken
+                    # b'foo' -> [b'f', b'o', b'o']
+                    pretoken = [bytes([byte]) for byte in pretoken]
+                    present_pairs = set((t1, t2) for t1, t2 in pairwise(pretoken))
+                    # apply merges to each pretoken
+                    for m1, m2 in self.merges:
+                        # short circuit for irrelevant merge
+                        if (m1, m2) not in present_pairs:
+                            continue
+                        # apply this merge
+                        for i, (t1, t2) in enumerate(pairwise(pretoken)):
+                            if (t1, t2) == (m1, m2):
+                                pretoken[i : i + 2] = [t1 + t2]
+                        # update present_pairs
+                        present_pairs = set((t1, t2) for t1, t2 in pairwise(pretoken))
+                    for tok in pretoken:
+                        yield self.enc[tok]
+            # for c in chunk:
+            #     yield self.enc[c]
+        # return [self.enc[c] for s in chunks for c in s]
 
     def encode(self, text: str) -> list[int]:
-        return self.encode_iterable(text)
+        return list(self.encode_iterable([text]))
 
     def decode(self, tokens: list[int]) -> str:
-        return "".join(chr(tok) for tok in tokens)
+        return b"".join(self.dec[tok] for tok in tokens).decode(
+            "utf-8", errors="replace"
+        )
 
 
 @dataclass
@@ -135,9 +198,7 @@ class BPE:
 if __name__ == "__main__":
     name = "TinyStoriesV2-GPT4-train"
     # name = "TinyStoriesV2-GPT4-valid"
-    corpus_path = (
-        Path(dirname(__file__)) / ".." / "data" / f"{name}.txt"
-    )
+    corpus_path = Path(dirname(__file__)) / ".." / "data" / f"{name}.txt"
     dump_path = Path(dirname(__file__)) / f"{name}-bpe.json"
     print(f"reading file {corpus_path.absolute().relative_to(Path.cwd())} ...")
     corpus_text = corpus_path.read_text()

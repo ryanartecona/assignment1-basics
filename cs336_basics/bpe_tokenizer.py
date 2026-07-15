@@ -1,5 +1,6 @@
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from functools import lru_cache
 from itertools import chain, groupby, islice, pairwise
 import json
 from multiprocessing import Pool
@@ -10,7 +11,8 @@ from typing import ClassVar, Iterable, Iterator
 import regex as re
 
 
-@dataclass
+# eq=False so the class is hashable (by identity) and supports @lru_cache method
+@dataclass(eq=False)
 class NaiveTokenizer:
     vocab: dict[int, bytes]
     merges: list[tuple[bytes, bytes]]
@@ -28,22 +30,45 @@ class NaiveTokenizer:
         next_vocab_index = max(self.vocab.keys())
         # in case some special tokens are substrings of other special tokens,
         # sort by length descending so we match the longest one first
-        self.special_tokens = sorted(
+        super().__setattr__('special_tokens', sorted(
             self.special_tokens or [], key=lambda s: (len(s), s), reverse=True
-        )
+        ))
         special_vocab = {
             i + next_vocab_index: tok.encode("utf-8")
             for i, tok in enumerate(self.special_tokens)
         }
-        self.dec = self.vocab | special_vocab
-        self.enc = {b: i for i, b in self.vocab.items()}
+        super().__setattr__('dec', self.vocab | special_vocab)
+        super().__setattr__('enc', {b: i for i, b in self.vocab.items()})
+        
+    @lru_cache(maxsize=2**16)
+    def _merge_pretoken(self, pretoken: bytes) -> list[bytes]:
+        # b'foo' -> [b'f', b'o', b'o']
+        pretoken = [bytes([byte]) for byte in pretoken]
+        present_pairs = set((t1, t2) for t1, t2 in pairwise(pretoken))
+        # apply merges to each pretoken
+        for m1, m2 in self.merges:
+            # short circuit for irrelevant merge
+            if (m1, m2) not in present_pairs:
+                continue
+            # apply this merge
+            for i, (t1, t2) in enumerate(pairwise(pretoken)):
+                if (t1, t2) == (m1, m2):
+                    pretoken[i : i + 2] = [t1 + t2]
+            # update present_pairs
+            present_pairs = set((t1, t2) for t1, t2 in pairwise(pretoken))
+        return pretoken
 
     def encode_iterable(self, chunks: Iterable[str]) -> Iterator[int]:
+
         for chunk in chunks:
             # TODO: prepend previous leftover to first doc if we have one, and save last doc as leftover for next chunk
-            docs = re.split(
-                "(" + "|".join(map(re.escape, self.special_tokens or [])) + ")", chunk
-            )
+            # splitting on an empty pattern splits character-wise, so avoid
+            if self.special_tokens:
+                docs = re.split(
+                    "(" + "|".join(map(re.escape, self.special_tokens)) + ")", chunk
+                )
+            else:
+                docs = [chunk]
             for doc in docs:
                 if doc in (self.special_tokens or []):
                     yield self.enc[doc.encode("utf-8")]
@@ -55,26 +80,9 @@ class NaiveTokenizer:
                 ]
                 # then apply merges to each pretoken
                 for pretoken in pretokens:
-                    # TODO: check a pretoken cache to avoid redundantly processing the same pretoken
-                    # b'foo' -> [b'f', b'o', b'o']
-                    pretoken = [bytes([byte]) for byte in pretoken]
-                    present_pairs = set((t1, t2) for t1, t2 in pairwise(pretoken))
-                    # apply merges to each pretoken
-                    for m1, m2 in self.merges:
-                        # short circuit for irrelevant merge
-                        if (m1, m2) not in present_pairs:
-                            continue
-                        # apply this merge
-                        for i, (t1, t2) in enumerate(pairwise(pretoken)):
-                            if (t1, t2) == (m1, m2):
-                                pretoken[i : i + 2] = [t1 + t2]
-                        # update present_pairs
-                        present_pairs = set((t1, t2) for t1, t2 in pairwise(pretoken))
+                    pretoken = self._merge_pretoken(pretoken)
                     for tok in pretoken:
                         yield self.enc[tok]
-            # for c in chunk:
-            #     yield self.enc[c]
-        # return [self.enc[c] for s in chunks for c in s]
 
     def encode(self, text: str) -> list[int]:
         return list(self.encode_iterable([text]))

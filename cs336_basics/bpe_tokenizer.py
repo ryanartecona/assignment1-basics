@@ -44,6 +44,7 @@ class NaiveTokenizer:
     def _merge_pretoken(self, pretoken: bytes) -> list[bytes]:
         # b'foo' -> [b'f', b'o', b'o']
         pretoken = [bytes([byte]) for byte in pretoken]
+        # set([(b'f', b'o'), (b'o', b'o')])
         present_pairs = set((t1, t2) for t1, t2 in pairwise(pretoken))
         # apply merges to each pretoken
         for m1, m2 in self.merges:
@@ -51,25 +52,30 @@ class NaiveTokenizer:
             if (m1, m2) not in present_pairs:
                 continue
             # apply this merge
-            for i, (t1, t2) in enumerate(pairwise(pretoken)):
+            i = 0
+            while i < len(pretoken) - 1:
+                t1, t2 = pretoken[i], pretoken[i+1]
                 if (t1, t2) == (m1, m2):
                     pretoken[i : i + 2] = [t1 + t2]
+                i += 1
             # update present_pairs
             present_pairs = set((t1, t2) for t1, t2 in pairwise(pretoken))
         return pretoken
 
     def encode_iterable(self, chunks: Iterable[str]) -> Iterator[int]:
-
+        leftover_part = None
         for chunk in chunks:
-            # TODO: prepend previous leftover to first doc if we have one, and save last doc as leftover for next chunk
             # splitting on an empty pattern splits character-wise, so avoid
+            if leftover_part:
+                chunk = leftover_part.decode('utf-8') + chunk
+                leftover_part = None
             if self.special_tokens:
                 docs = re.split(
                     "(" + "|".join(map(re.escape, self.special_tokens)) + ")", chunk
                 )
             else:
                 docs = [chunk]
-            for doc in docs:
+            for i, doc in enumerate(docs):
                 if doc in (self.special_tokens or []):
                     yield self.enc[doc.encode("utf-8")]
                     continue
@@ -78,11 +84,20 @@ class NaiveTokenizer:
                     m.group().encode("utf-8")
                     for m in re.finditer(self.PRETOKEN_PAT, doc)
                 ]
+                if i == len(docs) - 1:
+                    # for the last doc in docs, treat last pretoken as leftover
+                    # for next chunk
+                    leftover_part = pretokens[-1] if pretokens else None
+                    pretokens = pretokens[:-1]
                 # then apply merges to each pretoken
                 for pretoken in pretokens:
                     pretoken = self._merge_pretoken(pretoken)
                     for tok in pretoken:
                         yield self.enc[tok]
+        if leftover_part:
+            pretoken = self._merge_pretoken(leftover_part)
+            for tok in pretoken:
+                yield self.enc[tok]
 
     def encode(self, text: str) -> list[int]:
         return list(self.encode_iterable([text]))

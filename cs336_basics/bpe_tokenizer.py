@@ -1,19 +1,54 @@
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
-from itertools import chain, groupby, islice, pairwise
+from itertools import groupby, pairwise
 import json
 from multiprocessing import Pool
 from operator import itemgetter
 from pathlib import Path
 from posixpath import dirname
-from typing import ClassVar, Iterable, Iterator
+from typing import ClassVar, Iterable, Iterator, Optional
 import regex as re
+
+PRETOKEN_PAT = (
+    r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+)
+
+
+@dataclass
+class BPECodec:
+    enc: dict[int, bytes]
+    merges: list[tuple[bytes, bytes]]
+
+    @property
+    def vocab(self):
+        return self.enc
+
+    @classmethod
+    def from_json(cls, obj):
+        enc = {
+            i: tok.encode("utf-8", errors="replace") for i, tok in obj["enc"].items()
+        }
+        merges = [
+            (t1.encode("utf-8", errors="replace"), t2.encode("utf-8", errors="replace"))
+            for t1, t2 in obj["merges"]
+        ]
+        return cls(enc, merges)
+
+    def to_json(self):
+        enc_obj = {
+            i: tok.decode("utf-8", errors="replace") for i, tok in self.enc.items()
+        }
+        merges_obj = [
+            (t1.decode("utf-8", errors="replace"), t2.decode("utf-8", errors="replace"))
+            for t1, t2 in self.merges
+        ]
+        return {"enc": enc_obj, "merges": merges_obj}
 
 
 # eq=False so the class is hashable (by identity) and supports @lru_cache method
 @dataclass(eq=False)
-class NaiveTokenizer:
+class Tokenizer:
     vocab: dict[int, bytes]
     merges: list[tuple[bytes, bytes]]
     special_tokens: list[str] | None = None
@@ -22,24 +57,33 @@ class NaiveTokenizer:
     enc: dict[int, bytes] = field(init=False)
     dec: dict[bytes, int] = field(init=False)
 
-    PRETOKEN_PAT: ClassVar[str] = (
-        r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-    )
+    PRETOKEN_PAT: ClassVar[str] = PRETOKEN_PAT
 
     def __post_init__(self):
         next_vocab_index = max(self.vocab.keys())
         # in case some special tokens are substrings of other special tokens,
         # sort by length descending so we match the longest one first
-        super().__setattr__('special_tokens', sorted(
-            self.special_tokens or [], key=lambda s: (len(s), s), reverse=True
-        ))
+        super().__setattr__(
+            "special_tokens",
+            sorted(self.special_tokens or [], key=lambda s: (len(s), s), reverse=True),
+        )
         special_vocab = {
             i + next_vocab_index: tok.encode("utf-8")
             for i, tok in enumerate(self.special_tokens)
         }
-        super().__setattr__('dec', self.vocab | special_vocab)
-        super().__setattr__('enc', {b: i for i, b in self.vocab.items()})
-        
+        super().__setattr__("dec", self.vocab | special_vocab)
+        super().__setattr__("enc", {b: i for i, b in self.vocab.items()})
+
+    @classmethod
+    def from_file(
+        cls, codec_filepath: str | Path, special_tokens: Optional[list[str]] = None
+    ):
+        codec_filepath = Path(codec_filepath)
+        with open(codec_filepath, "r") as f:
+            codec_json = json.load(f)
+        codec = BPECodec.from_json(codec_json)
+        return cls(codec.vocab, codec.merges, special_tokens)
+
     @lru_cache(maxsize=2**16)
     def _merge_pretoken(self, pretoken: bytes) -> list[bytes]:
         # b'foo' -> [b'f', b'o', b'o']
@@ -54,7 +98,7 @@ class NaiveTokenizer:
             # apply this merge
             i = 0
             while i < len(pretoken) - 1:
-                t1, t2 = pretoken[i], pretoken[i+1]
+                t1, t2 = pretoken[i], pretoken[i + 1]
                 if (t1, t2) == (m1, m2):
                     pretoken[i : i + 2] = [t1 + t2]
                 i += 1
@@ -67,7 +111,7 @@ class NaiveTokenizer:
         for chunk in chunks:
             # splitting on an empty pattern splits character-wise, so avoid
             if leftover_part:
-                chunk = leftover_part.decode('utf-8') + chunk
+                chunk = leftover_part.decode("utf-8") + chunk
                 leftover_part = None
             if self.special_tokens:
                 docs = re.split(
@@ -110,9 +154,7 @@ class NaiveTokenizer:
 
 @dataclass
 class BPE:
-    PRETOKEN_PAT: str = (
-        r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-    )
+    PRETOKEN_PAT: ClassVar[str] = PRETOKEN_PAT
 
     def _count_doc(self, doc: str) -> Counter:
         doc_occs = Counter()
@@ -215,30 +257,32 @@ class BPE:
                 pretoken_occs[pretoken_merged] += pretoken_occs[pretoken_premerge]
                 pretoken_occs[pretoken_premerge] = 0
 
-        return enc, merges
+        return BPECodec(enc, merges)
 
 
 if __name__ == "__main__":
-    name = "TinyStoriesV2-GPT4-train"
-    # name = "TinyStoriesV2-GPT4-valid"
+    # name = "TinyStoriesV2-GPT4-train"
+    name = "TinyStoriesV2-GPT4-valid"
     corpus_path = Path(dirname(__file__)) / ".." / "data" / f"{name}.txt"
     dump_path = Path(dirname(__file__)) / f"{name}-bpe.json"
-    print(f"reading file {corpus_path.absolute().relative_to(Path.cwd())} ...")
-    corpus_text = corpus_path.read_text()
-    print("training BPE tokenizer...")
-    enc, merges = BPE().train(
-        corpus_text,
-        vocab_size=10_000,
-        special_tokens=["<|endoftext|>"],
-    )
-    enc = {i: tok.decode("utf-8", errors="replace") for i, tok in enc.items()}
-    merges = [
-        (t1.decode("utf-8", errors="replace"), t2.decode("utf-8", errors="replace"))
-        for t1, t2 in merges
-    ]
-    json.dump(
-        {"enc": enc, "merges": merges},
-        open(dump_path, "w"),
-        indent=2,
-    )
-    print(f"dumped json to {dump_path.relative_to(Path.cwd())}")
+
+    # Train a BPECodec on the above corpus and save it
+    # print(f"reading file {corpus_path.absolute().relative_to(Path.cwd())} ...")
+    # corpus_text = corpus_path.read_text()
+    # print("training BPE tokenizer...")
+    # codec = BPE().train(
+    #     corpus_text,
+    #     vocab_size=10_000,
+    #     special_tokens=["<|endoftext|>"],
+    # )
+    # json.dump(
+    #     codec.to_json(),
+    #     open(dump_path, "w"),
+    #     indent=2,
+    # )
+    # print(f"dumped json to {dump_path.relative_to(Path.cwd())}")
+
+    # hacky roundtrip test of Tokenizer.from_file and BPECodec
+    t = Tokenizer.from_file(dump_path)
+    test = t.decode(t.encode("My name is Ryan!"))
+    print("TEST roundtrip:", repr(test))

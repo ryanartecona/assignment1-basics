@@ -34,7 +34,7 @@ def run_linear(
     """
 
     layer = Linear(d_in, d_out)
-    layer.load_state_dict({"W": weights})
+    layer.load_state_dict({"w": weights})
     return layer.forward(in_features)
 
 

@@ -10,7 +10,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from cs336_basics.bpe_tokenizer import BPE, Tokenizer
+from cs336_basics.tokenizer import BPE, Tokenizer
 
 
 def run_linear(

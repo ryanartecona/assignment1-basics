@@ -29,3 +29,24 @@ class Linear(nn.Module):
 
     def forward(self, x: Float[torch.Tensor, "... d_in"]) -> torch.Tensor:
         return einsum(self.w, x, "d_out d_in, ... d_in -> ... d_out")
+
+
+class Embedding(nn.Module):
+    weights: Float[torch.Tensor, "vocab_size d_model"]
+
+    def __init__(
+        self,
+        vocab_size: int,
+        d_model: int,
+        device: torch.device = None,
+        dtype: torch.dtype = None,
+    ):
+        super().__init__()
+        weights = torch.zeros([vocab_size, d_model], device=device, dtype=dtype)
+        # NOTE init by truncated normal distribution not yet verified correct
+        nn.init.trunc_normal_(weights, mean=0, std=1, a=-3, b=3)
+        self.weights = nn.Parameter(weights)
+
+    def forward(self, token_ids: Float[torch.Tensor, "..."]):
+        # treat each token_id as index into embedding matrix
+        return self.weights[token_ids]

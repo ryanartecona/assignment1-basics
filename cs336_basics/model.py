@@ -1,11 +1,12 @@
 from typing import Optional
 
 from jaxtyping import Float
-from einops.einops import einsum
+from einops.einops import einsum, reduce, repeat
 from torch import nn
 import torch
 
 
+# Section 3.3.2
 class Linear(nn.Module):
     w: Float[torch.Tensor, "d_out d_in"]
 
@@ -31,6 +32,7 @@ class Linear(nn.Module):
         return einsum(self.w, x, "d_out d_in, ... d_in -> ... d_out")
 
 
+# Section 3.3.3
 class Embedding(nn.Module):
     weights: Float[torch.Tensor, "vocab_size d_model"]
 
@@ -50,3 +52,35 @@ class Embedding(nn.Module):
     def forward(self, token_ids: Float[torch.Tensor, "..."]):
         # treat each token_id as index into embedding matrix
         return self.weights[token_ids]
+
+
+# Section 3.4.1
+class RMSNorm(nn.Module):
+    d_model: int
+    eps: float
+    gain: Float[torch.Tensor, "d_model"]
+
+    def __init__(
+        self,
+        d_model: int,
+        eps: float = 1e-5,
+        device: torch.device = None,
+        dtype: torch.dtype = None,
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.eps = eps
+        self.gain = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
+
+    def forward(
+        self, x: Float[torch.Tensor, "... d_model"]
+    ) -> Float[torch.Tensor, "... d_model"]:
+        in_dtype = x.dtype
+        x = x.to(torch.float32)
+
+        squares = x.square() + self.eps
+        means = reduce(squares, "... d_model -> ...", "sum") / self.d_model
+        means = repeat(means, "... -> ... d_model", d_model=self.d_model)
+        res = (x / means.sqrt()) * self.gain
+
+        return res.to(in_dtype)

@@ -84,3 +84,42 @@ class RMSNorm(nn.Module):
         res = (x / means.sqrt()) * self.gain
 
         return res.to(in_dtype)
+
+
+# Section 3.4.2
+class SwiGLU(nn.Module):
+    w1: Float[torch.Tensor, "d_ff d_model"]
+    w2: Float[torch.Tensor, "d_model d_ff"]
+    w3: Float[torch.Tensor, "d_ff d_model"]
+
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        device: torch.device = None,
+        dtype: torch.dtype = None,
+    ):
+        super().__init__()
+        # TODO: init d_ff to be 8/3 of d_model, rounded to nearest 64 multiple
+        # (requires making d_ff optional)
+        self.w1 = nn.Parameter(torch.ones([d_ff, d_model], device=device, dtype=dtype))
+        self.w2 = nn.Parameter(torch.ones([d_model, d_ff], device=device, dtype=dtype))
+        self.w3 = nn.Parameter(torch.ones([d_ff, d_model], device=device, dtype=dtype))
+
+    def forward(
+        self, x: Float[torch.Tensor, "... d_model"]
+    ) -> Float[torch.Tensor, "... d_model"]:
+        # SwiGLU(x, W1, W2, W3) = W2 @ (SiLU(W1 @ x) * W3 @ x)
+        # where SiLU(x) = x * sigmoid(x)
+
+        x1 = einsum(self.w1, x, "d_ff d_model, ... d_model -> ... d_ff")
+        x1_silu = x1 * torch.sigmoid(x1)
+        x3 = einsum(self.w3, x, "d_ff d_model, ... d_model -> ... d_ff")
+
+        # alt 1
+        # x_gated = einsum(x1_silu, x3, "... d_ff, ... d_ff -> ... d_ff")
+        # alt 2
+        x_gated = x1_silu * x3
+
+        res = einsum(self.w2, x_gated, "d_model d_ff, ... d_ff -> ... d_model")
+        return res

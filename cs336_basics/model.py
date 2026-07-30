@@ -123,3 +123,48 @@ class SwiGLU(nn.Module):
 
         res = einsum(self.w2, x_gated, "d_model d_ff, ... d_ff -> ... d_model")
         return res
+
+
+# Section 3.4.3
+class RoPE(nn.Module):
+    theta: float
+    max_seq_len: int
+    d_k: int
+    sin_thetas: Float[torch.Tensor, "max_seq_len d_k"]
+    cos_thetas: Float[torch.Tensor, "max_seq_len d_k"]
+
+    def __init__(
+        self, theta: float, d_k: int, max_seq_len: int, device: torch.device = None
+    ):
+        super().__init__()
+        self.theta = theta
+        self.max_seq_len = max_seq_len
+        self.d_k = d_k
+
+        i = torch.arange(max_seq_len)
+        k = torch.arange(1, 1 + d_k // 2)
+        thetas = torch.outer(i, torch.pow(self.theta, -(2 * k - 2) / max_seq_len))
+        sin_thetas = repeat(torch.sin(thetas), 'i k -> i (k 2)')
+        cos_thetas = repeat(torch.cos(thetas), 'i k -> i (k 2)')
+        self.register_buffer("sin_thetas", sin_thetas, persistent=False)
+        self.register_buffer("cos_thetas", cos_thetas, persistent=False)
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, "... seq_len d_k"],
+        token_positions: Float[torch.Tensor, "... seq_len"],
+    ) -> Float[torch.Tensor, "... seq_len d_k"]:
+        seq_len = x.shape[-2]
+        assert x.shape[-1] == self.d_k
+        assert seq_len == token_positions.shape[-1]
+
+        odds = torch.arange(self.d_k) % 2 == 1
+        sin_mask = torch.ones(self.d_k)
+        sin_mask[odds] = -1
+
+        sin_factor = self.sin_thetas[token_positions] * sin_mask
+        cos_factor = self.cos_thetas[token_positions]
+        # todo this only works for 0th seq, not 1+th, rethink this matmul decomp
+        res = x * sin_factor + x * cos_factor
+
+        return res

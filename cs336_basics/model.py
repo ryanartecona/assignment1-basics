@@ -141,12 +141,19 @@ class RoPE(nn.Module):
         self.max_seq_len = max_seq_len
         self.d_k = d_k
 
+        # prefill 2d cos(theta[i,k]) and sin(theta[i,k]) lookups
         i = torch.arange(max_seq_len)
         k = torch.arange(1, 1 + d_k // 2)
-        thetas = torch.outer(i, torch.pow(self.theta, -(2 * k - 2) / max_seq_len))
-        sin_thetas = repeat(torch.sin(thetas), 'i k -> i (k 2)')
-        cos_thetas = repeat(torch.cos(thetas), 'i k -> i (k 2)')
-        self.register_buffer("sin_thetas", sin_thetas, persistent=False)
+        thetas = torch.outer(i, torch.pow(self.theta, -(2 * k - 2) / d_k))
+        sin_thetas = repeat(torch.sin(thetas), "i k -> i (k 2)")
+        cos_thetas = repeat(torch.cos(thetas), "i k -> i (k 2)")
+
+        # negate even sins for matmul decomp in forward pass
+        evens = torch.arange(self.d_k) % 2 == 0
+        sin_mask = torch.ones(self.d_k)
+        sin_mask[evens] = -1
+
+        self.register_buffer("sin_thetas", sin_thetas * sin_mask, persistent=False)
         self.register_buffer("cos_thetas", cos_thetas, persistent=False)
 
     def forward(
@@ -154,17 +161,8 @@ class RoPE(nn.Module):
         x: Float[torch.Tensor, "... seq_len d_k"],
         token_positions: Float[torch.Tensor, "... seq_len"],
     ) -> Float[torch.Tensor, "... seq_len d_k"]:
-        seq_len = x.shape[-2]
-        assert x.shape[-1] == self.d_k
-        assert seq_len == token_positions.shape[-1]
-
-        odds = torch.arange(self.d_k) % 2 == 1
-        sin_mask = torch.ones(self.d_k)
-        sin_mask[odds] = -1
-
-        sin_factor = self.sin_thetas[token_positions] * sin_mask
+        sin_factor = self.sin_thetas[token_positions]
         cos_factor = self.cos_thetas[token_positions]
-        # todo this only works for 0th seq, not 1+th, rethink this matmul decomp
-        res = x * sin_factor + x * cos_factor
-
-        return res
+        # pairwise roll the last dim of x, i.e. [0,1,2,3,...] -> [1,0,3,2,...]
+        x_rot = x.reshape(x.shape[:-1] + (-1, 2)).roll(1, -1).reshape(x.shape)
+        return x_rot * sin_factor + x * cos_factor

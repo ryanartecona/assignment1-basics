@@ -1,6 +1,7 @@
 import math
 from typing import Optional
 
+from einops import rearrange
 from jaxtyping import Float
 from einops.einops import einsum, reduce, repeat
 from torch import nn
@@ -194,3 +195,77 @@ def scaled_dot_product_attention(
     inner = q @ k.transpose(-2, -1) / math.sqrt(d_k)
     inner[mask == False] = float("-inf")
     return softmax(inner, dim=-1) @ v
+
+
+# Section 3.4.5 - multihead self attention
+class MultiheadSelfAttention(nn.Module):
+    n_heads: int
+    wQ: Float[torch.Tensor, "h*d_k d_model"]
+    wK: Float[torch.Tensor, "h*d_k d_model"]
+    wV: Float[torch.Tensor, "h*d_v d_model"]
+    wO: Float[torch.Tensor, "d_model h*d_v"]
+    rope: Optional[RoPE]
+
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        rope: Optional[RoPE] = None,
+    ):
+        super().__init__()
+        self.n_heads = n_heads
+        self.rope = rope
+        h = n_heads
+        d_k = d_model // h
+        d_v = d_k
+        wQ = torch.zeros([d_k * h, d_model])
+        hk_m_stddev = 2.0 / (d_k * h + d_model)
+        nn.init.trunc_normal_(
+            wQ, mean=0, std=hk_m_stddev, a=hk_m_stddev * -3, b=hk_m_stddev * 3
+        )
+        self.wQ = nn.Parameter(wQ)
+        wK = torch.zeros([d_k * h, d_model])
+        nn.init.trunc_normal_(
+            wK, mean=0, std=hk_m_stddev, a=hk_m_stddev * -3, b=hk_m_stddev * 3
+        )
+        self.wK = nn.Parameter(wK)
+        hv_m_stddev = 2.0 / (d_v * h + d_model)
+        wV = torch.zeros([d_v * h, d_model])
+        nn.init.trunc_normal_(
+            wV, mean=0, std=hv_m_stddev, a=hv_m_stddev * -3, b=hv_m_stddev * 3
+        )
+        self.wV = nn.Parameter(wV)
+        wO = torch.zeros([d_model, h * d_v])
+        nn.init.trunc_normal_(
+            wO, mean=0, std=hv_m_stddev, a=hv_m_stddev * -3, b=hv_m_stddev * 3
+        )
+        self.wO = nn.Parameter(wO)
+
+    def _rope(
+        self, qk: Float[torch.Tensor, "... n d_k"]
+    ) -> Float[torch.Tensor, "... n d_k"]:
+        if self.rope is None:
+            return qk
+        seq_len = qk.shape[-2]
+        token_positions = torch.arange(seq_len, device=qk.device)
+        return self.rope(qk, token_positions)
+
+    def forward(
+        self, x: Float[torch.Tensor, "... n d_model"]
+    ) -> Float[torch.Tensor, "... n d_model"]:
+        mask = torch.ones(x.shape[:-1] + (x.shape[-2],), dtype=torch.bool).tril()
+        q_heads = einsum(self.wQ, x, "h_d_k d_model, ... n d_model -> ... h_d_k n")
+        k_heads = einsum(self.wK, x, "h_d_k d_model, ... n d_model -> ... h_d_k n")
+        v_heads = einsum(self.wV, x, "h_d_v d_model, ... n d_model -> ... h_d_v n")
+        res_hbatch = scaled_dot_product_attention(
+            q=self._rope(
+                rearrange(q_heads, "... (h d_k) n -> ... h n d_k", h=self.n_heads)
+            ),
+            k=self._rope(
+                rearrange(k_heads, "... (h d_k) n -> ... h n d_k", h=self.n_heads)
+            ),
+            v=rearrange(v_heads, "... (h d_v) n -> ... h n d_v", h=self.n_heads),
+            mask=repeat(mask, "... n m -> ... h n m", h=self.n_heads),
+        )
+        res = rearrange(res_hbatch, "... h n d_v -> ... n (h d_v)")
+        return einsum(self.wO, res, "d_model h_d_v, ... n h_d_v -> ... n d_model")

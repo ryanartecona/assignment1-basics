@@ -10,7 +10,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from cs336_basics.model import Embedding, Linear, RMSNorm, SwiGLU, RoPE, scaled_dot_product_attention, softmax
+from cs336_basics.model import Embedding, Linear, MultiheadSelfAttention, RMSNorm, SwiGLU, RoPE, scaled_dot_product_attention, softmax
 from cs336_basics.tokenizer import BPE, Tokenizer
 
 
@@ -152,7 +152,14 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    mhsa = MultiheadSelfAttention(d_model, num_heads)
+    mhsa.load_state_dict({
+        "wQ": q_proj_weight,
+        "wK": k_proj_weight,
+        "wV": v_proj_weight,
+        "wO": o_proj_weight,
+    })
+    return mhsa.forward(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -192,7 +199,15 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    rope = RoPE(theta, d_model // num_heads, max_seq_len)
+    mhsa = MultiheadSelfAttention(d_model, num_heads, rope=rope)
+    mhsa.load_state_dict({
+        "wQ": q_proj_weight,
+        "wK": k_proj_weight,
+        "wV": v_proj_weight,
+        "wO": o_proj_weight,
+    })
+    return mhsa.forward(in_features)
 
 
 def run_rope(

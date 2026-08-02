@@ -1,3 +1,4 @@
+import math
 from typing import Optional
 
 from jaxtyping import Float
@@ -180,3 +181,16 @@ def softmax(
     x_exp = torch.exp(x - x_max)
     x_exp_sum = x_exp.sum(dim=dim, keepdim=True)
     return x_exp / x_exp_sum
+
+
+# Section 3.3.4 - scaled dot product attention
+def scaled_dot_product_attention(
+    q: Float[torch.Tensor, "... n d_k"],
+    k: Float[torch.Tensor, "... m d_k"],
+    v: Float[torch.Tensor, "... m d_v"],
+    mask: Optional[Float[torch.Tensor, "... n m"]] = None,
+) -> Float[torch.Tensor, "... n d_v"]:
+    d_k = q.shape[-1]
+    inner = q @ k.transpose(-2, -1) / math.sqrt(d_k)
+    inner[mask == False] = float("-inf")
+    return softmax(inner, dim=-1) @ v

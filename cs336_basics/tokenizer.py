@@ -163,9 +163,7 @@ class BPE:
             doc_occs[tuple(bytes([byte]) for byte in match_bytes)] += 1
         return doc_occs
 
-    def train(
-        self, text: str, vocab_size: int, special_tokens: list[str]
-    ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+    def train(self, text: str, vocab_size: int, special_tokens: list[str]) -> BPECodec:
         # init the vocabulary
         init_vocab = list(bytes([byte]) for byte in range(256))
         init_vocab += [token.encode("utf-8") for token in special_tokens]

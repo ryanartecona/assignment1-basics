@@ -14,8 +14,8 @@ class Linear(nn.Module):
         self,
         d_in: int,
         d_out: int,
-        device: torch.device = None,
-        dtype: torch.dtype | None = None,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ):
         super().__init__()
         # NOTE init by truncated normal distribution not yet verified correct
@@ -40,8 +40,8 @@ class Embedding(nn.Module):
         self,
         vocab_size: int,
         d_model: int,
-        device: torch.device = None,
-        dtype: torch.dtype = None,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ):
         super().__init__()
         weights = torch.zeros([vocab_size, d_model], device=device, dtype=dtype)
@@ -64,8 +64,8 @@ class RMSNorm(nn.Module):
         self,
         d_model: int,
         eps: float = 1e-5,
-        device: torch.device = None,
-        dtype: torch.dtype = None,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ):
         super().__init__()
         self.d_model = d_model
@@ -96,8 +96,8 @@ class SwiGLU(nn.Module):
         self,
         d_model: int,
         d_ff: int,
-        device: torch.device = None,
-        dtype: torch.dtype = None,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ):
         super().__init__()
         # TODO: init d_ff to be 8/3 of d_model, rounded to nearest 64 multiple
@@ -134,7 +134,11 @@ class RoPE(nn.Module):
     cos_thetas: Float[torch.Tensor, "max_seq_len d_k"]
 
     def __init__(
-        self, theta: float, d_k: int, max_seq_len: int, device: torch.device = None
+        self,
+        theta: float,
+        d_k: int,
+        max_seq_len: int,
+        device: torch.device | None = None,
     ):
         super().__init__()
         self.theta = theta

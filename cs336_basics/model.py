@@ -166,3 +166,13 @@ class RoPE(nn.Module):
         # pairwise roll the last dim of x, i.e. [0,1,2,3,...] -> [1,0,3,2,...]
         x_rot = x.reshape(x.shape[:-1] + (-1, 2)).roll(1, -1).reshape(x.shape)
         return x_rot * sin_factor + x * cos_factor
+
+
+# Section 3.3.4 - softmax
+def softmax(
+    x: Float[torch.Tensor, "..."], dim: Optional[int] = -1
+) -> Float[torch.Tensor, "..."]:
+    x_max = x.max(dim=dim, keepdim=True).values
+    x_exp = torch.exp(x - x_max)
+    x_exp_sum = x_exp.sum(dim=dim, keepdim=True)
+    return x_exp / x_exp_sum

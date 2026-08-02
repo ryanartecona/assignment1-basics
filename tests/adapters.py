@@ -18,6 +18,7 @@ from cs336_basics.model import (
     SwiGLU,
     RoPE,
     TransformerBlock,
+    TransformerLM,
     scaled_dot_product_attention,
     softmax,
 )
@@ -415,7 +416,32 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    transformer_lm = TransformerLM(
+        vocab_size=vocab_size,
+        d_model=d_model,
+        n_layers=num_layers,
+        n_heads=num_heads,
+        d_ff=d_ff,
+        rope_theta=rope_theta,
+        context_length=context_length,
+    )
+    state_map = {
+        "token_embeddings.weights": weights["token_embeddings.weight"],
+        "ln_final.gain": weights["ln_final.weight"],
+        "lm_out.w": weights["lm_head.weight"],
+    }
+    for i in range(num_layers):
+        state_map[f"layers.{i}.attn_block.mhsa.wQ"] = weights[f"layers.{i}.attn.q_proj.weight"]
+        state_map[f"layers.{i}.attn_block.mhsa.wK"] = weights[f"layers.{i}.attn.k_proj.weight"]
+        state_map[f"layers.{i}.attn_block.mhsa.wV"] = weights[f"layers.{i}.attn.v_proj.weight"]
+        state_map[f"layers.{i}.attn_block.mhsa.wO"] = weights[f"layers.{i}.attn.output_proj.weight"]
+        state_map[f"layers.{i}.attn_block.rmsnorm.gain"] = weights[f"layers.{i}.ln1.weight"]
+        state_map[f"layers.{i}.ff_block.ffn.w1"] = weights[f"layers.{i}.ffn.w1.weight"]
+        state_map[f"layers.{i}.ff_block.ffn.w2"] = weights[f"layers.{i}.ffn.w2.weight"]
+        state_map[f"layers.{i}.ff_block.ffn.w3"] = weights[f"layers.{i}.ffn.w3.weight"]
+        state_map[f"layers.{i}.ff_block.rmsnorm.gain"] = weights[f"layers.{i}.ln2.weight"]
+    transformer_lm.load_state_dict(state_map)
+    return transformer_lm.forward(in_indices)
 
 
 def run_rmsnorm(

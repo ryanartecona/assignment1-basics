@@ -246,3 +246,61 @@ class MultiheadSelfAttention(nn.Module):
         )
         res = rearrange(res_hbatch, "... h n d_v -> ... n (h d_v)")
         return einsum(self.wO, res, "d_model h_d_v, ... n h_d_v -> ... n d_model")
+
+
+# Section 3.5 - transformer block
+class TransformerBlock(nn.Module):
+    attn_block: nn.Module
+
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        d_ff: int,
+        rope: RoPE | None = None,
+    ):
+        super().__init__()
+        self.attn_block = nn.Sequential()
+        self.attn_block.add_module("rmsnorm", RMSNorm(d_model))
+        self.attn_block.add_module("mhsa", MultiheadSelfAttention(d_model, n_heads, rope=rope))
+        self.ff_block = nn.Sequential()
+        self.ff_block.add_module("rmsnorm", RMSNorm(d_model))
+        self.ff_block.add_module("ffn", SwiGLU(d_model, d_ff))
+
+    def forward(self, x: Float[torch.Tensor, "... n d_model"]) -> Float[torch.Tensor, "... n d_model"]:
+        x += self.attn_block(x)
+        x += self.ff_block(x)
+        return x
+
+
+# Section 3.5 - transformer model
+class TransformerLM(nn.Module):
+    token_embeddings: Embedding
+    layers: nn.Sequential
+    ln_final: RMSNorm
+    lm_out: Linear
+    
+    def __init__(
+        self,
+        vocab_size: int,
+        d_model: int,
+        n_heads: int,
+        d_ff: int,
+        n_layers: int,
+        rope_theta: float,
+        context_length: int,
+    ):
+        super().__init__()
+        self.token_embeddings = Embedding(vocab_size, d_model)
+        d_k = d_model // n_heads
+        rope = RoPE(theta=rope_theta, d_k=d_k, max_seq_len=context_length)
+        self.layers = nn.Sequential(*[TransformerBlock(d_model, n_heads, d_ff, rope=rope) for _ in range(n_layers)])
+        self.ln_final = RMSNorm(d_model)
+        self.lm_out = Linear(d_model, vocab_size)
+
+    def forward(self, in_indices: Float[torch.Tensor, "... seq_len"]):
+        emb = self.token_embeddings(in_indices)
+        res = self.layers(emb)
+        out = self.ln_final(res)
+        logits = self.lm_out(out)
+        return logits

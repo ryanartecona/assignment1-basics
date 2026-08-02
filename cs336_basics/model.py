@@ -1,5 +1,4 @@
 import math
-from typing import Optional
 
 from einops import rearrange
 from jaxtyping import Float
@@ -16,8 +15,8 @@ class Linear(nn.Module):
         self,
         d_in: int,
         d_out: int,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
         super().__init__()
         # NOTE init by truncated normal distribution not yet verified correct
@@ -42,8 +41,8 @@ class Embedding(nn.Module):
         self,
         vocab_size: int,
         d_model: int,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
         super().__init__()
         weights = torch.zeros([vocab_size, d_model], device=device, dtype=dtype)
@@ -66,17 +65,15 @@ class RMSNorm(nn.Module):
         self,
         d_model: int,
         eps: float = 1e-5,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
         super().__init__()
         self.d_model = d_model
         self.eps = eps
         self.gain = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
 
-    def forward(
-        self, x: Float[torch.Tensor, "... d_model"]
-    ) -> Float[torch.Tensor, "... d_model"]:
+    def forward(self, x: Float[torch.Tensor, "... d_model"]) -> Float[torch.Tensor, "... d_model"]:
         in_dtype = x.dtype
         x = x.to(torch.float32)
 
@@ -98,8 +95,8 @@ class SwiGLU(nn.Module):
         self,
         d_model: int,
         d_ff: int,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ):
         super().__init__()
         # TODO: init d_ff to be 8/3 of d_model, rounded to nearest 64 multiple
@@ -108,9 +105,7 @@ class SwiGLU(nn.Module):
         self.w2 = nn.Parameter(torch.ones([d_model, d_ff], device=device, dtype=dtype))
         self.w3 = nn.Parameter(torch.ones([d_ff, d_model], device=device, dtype=dtype))
 
-    def forward(
-        self, x: Float[torch.Tensor, "... d_model"]
-    ) -> Float[torch.Tensor, "... d_model"]:
+    def forward(self, x: Float[torch.Tensor, "... d_model"]) -> Float[torch.Tensor, "... d_model"]:
         # SwiGLU(x, W1, W2, W3) = W2 @ (SiLU(W1 @ x) * W3 @ x)
         # where SiLU(x) = x * sigmoid(x)
 
@@ -175,9 +170,7 @@ class RoPE(nn.Module):
 
 
 # Section 3.3.4 - softmax
-def softmax(
-    x: Float[torch.Tensor, "..."], dim: Optional[int] = -1
-) -> Float[torch.Tensor, "..."]:
+def softmax(x: Float[torch.Tensor, "..."], dim: int | None = -1) -> Float[torch.Tensor, "..."]:
     x_max = x.max(dim=dim, keepdim=True).values
     x_exp = torch.exp(x - x_max)
     x_exp_sum = x_exp.sum(dim=dim, keepdim=True)
@@ -189,7 +182,7 @@ def scaled_dot_product_attention(
     q: Float[torch.Tensor, "... n d_k"],
     k: Float[torch.Tensor, "... m d_k"],
     v: Float[torch.Tensor, "... m d_v"],
-    mask: Optional[Float[torch.Tensor, "... n m"]] = None,
+    mask: Float[torch.Tensor, "... n m"] | None = None,
 ) -> Float[torch.Tensor, "... n d_v"]:
     d_k = q.shape[-1]
     inner = q @ k.transpose(-2, -1) / math.sqrt(d_k)
@@ -204,13 +197,13 @@ class MultiheadSelfAttention(nn.Module):
     wK: Float[torch.Tensor, "h*d_k d_model"]
     wV: Float[torch.Tensor, "h*d_v d_model"]
     wO: Float[torch.Tensor, "d_model h*d_v"]
-    rope: Optional[RoPE]
+    rope: RoPE | None
 
     def __init__(
         self,
         d_model: int,
         n_heads: int,
-        rope: Optional[RoPE] = None,
+        rope: RoPE | None = None,
     ):
         super().__init__()
         self.n_heads = n_heads
@@ -220,50 +213,34 @@ class MultiheadSelfAttention(nn.Module):
         d_v = d_k
         wQ = torch.zeros([d_k * h, d_model])
         hk_m_stddev = 2.0 / (d_k * h + d_model)
-        nn.init.trunc_normal_(
-            wQ, mean=0, std=hk_m_stddev, a=hk_m_stddev * -3, b=hk_m_stddev * 3
-        )
+        nn.init.trunc_normal_(wQ, mean=0, std=hk_m_stddev, a=hk_m_stddev * -3, b=hk_m_stddev * 3)
         self.wQ = nn.Parameter(wQ)
         wK = torch.zeros([d_k * h, d_model])
-        nn.init.trunc_normal_(
-            wK, mean=0, std=hk_m_stddev, a=hk_m_stddev * -3, b=hk_m_stddev * 3
-        )
+        nn.init.trunc_normal_(wK, mean=0, std=hk_m_stddev, a=hk_m_stddev * -3, b=hk_m_stddev * 3)
         self.wK = nn.Parameter(wK)
         hv_m_stddev = 2.0 / (d_v * h + d_model)
         wV = torch.zeros([d_v * h, d_model])
-        nn.init.trunc_normal_(
-            wV, mean=0, std=hv_m_stddev, a=hv_m_stddev * -3, b=hv_m_stddev * 3
-        )
+        nn.init.trunc_normal_(wV, mean=0, std=hv_m_stddev, a=hv_m_stddev * -3, b=hv_m_stddev * 3)
         self.wV = nn.Parameter(wV)
         wO = torch.zeros([d_model, h * d_v])
-        nn.init.trunc_normal_(
-            wO, mean=0, std=hv_m_stddev, a=hv_m_stddev * -3, b=hv_m_stddev * 3
-        )
+        nn.init.trunc_normal_(wO, mean=0, std=hv_m_stddev, a=hv_m_stddev * -3, b=hv_m_stddev * 3)
         self.wO = nn.Parameter(wO)
 
-    def _rope(
-        self, qk: Float[torch.Tensor, "... n d_k"]
-    ) -> Float[torch.Tensor, "... n d_k"]:
+    def _rope(self, qk: Float[torch.Tensor, "... n d_k"]) -> Float[torch.Tensor, "... n d_k"]:
         if self.rope is None:
             return qk
         seq_len = qk.shape[-2]
         token_positions = torch.arange(seq_len, device=qk.device)
         return self.rope(qk, token_positions)
 
-    def forward(
-        self, x: Float[torch.Tensor, "... n d_model"]
-    ) -> Float[torch.Tensor, "... n d_model"]:
+    def forward(self, x: Float[torch.Tensor, "... n d_model"]) -> Float[torch.Tensor, "... n d_model"]:
         mask = torch.ones(x.shape[:-1] + (x.shape[-2],), dtype=torch.bool).tril()
         q_heads = einsum(self.wQ, x, "h_d_k d_model, ... n d_model -> ... h_d_k n")
         k_heads = einsum(self.wK, x, "h_d_k d_model, ... n d_model -> ... h_d_k n")
         v_heads = einsum(self.wV, x, "h_d_v d_model, ... n d_model -> ... h_d_v n")
         res_hbatch = scaled_dot_product_attention(
-            q=self._rope(
-                rearrange(q_heads, "... (h d_k) n -> ... h n d_k", h=self.n_heads)
-            ),
-            k=self._rope(
-                rearrange(k_heads, "... (h d_k) n -> ... h n d_k", h=self.n_heads)
-            ),
+            q=self._rope(rearrange(q_heads, "... (h d_k) n -> ... h n d_k", h=self.n_heads)),
+            k=self._rope(rearrange(k_heads, "... (h d_k) n -> ... h n d_k", h=self.n_heads)),
             v=rearrange(v_heads, "... (h d_v) n -> ... h n d_v", h=self.n_heads),
             mask=repeat(mask, "... n m -> ... h n m", h=self.n_heads),
         )

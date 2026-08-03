@@ -1,7 +1,7 @@
 import math
 
 from einops import rearrange
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from einops.einops import einsum, reduce, repeat
 from torch import nn
 import torch
@@ -279,7 +279,7 @@ class TransformerLM(nn.Module):
     layers: nn.Sequential
     ln_final: RMSNorm
     lm_out: Linear
-    
+
     def __init__(
         self,
         vocab_size: int,
@@ -304,3 +304,14 @@ class TransformerLM(nn.Module):
         out = self.ln_final(res)
         logits = self.lm_out(out)
         return logits
+
+
+def cross_entropy_loss(
+    logits: Float[torch.Tensor, "... seq_len vocab_size"], targets: Int[torch.Tensor, "... seq_len"]
+) -> Float[torch.Tensor, "..."]:
+    logits_max = logits.max(dim=-1, keepdim=True).values
+    logits_adj = logits - logits_max
+    logits_exp = torch.exp(logits_adj)
+    logits_exp_sum = logits_exp.sum(dim=-1, keepdim=True)
+    log_probs = logits_adj - torch.log(logits_exp_sum)
+    return -log_probs.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1).mean()

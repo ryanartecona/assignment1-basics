@@ -1,4 +1,5 @@
 import math
+from typing import Any, Callable, Optional
 
 from einops import rearrange
 from jaxtyping import Float, Int
@@ -315,3 +316,50 @@ def cross_entropy_loss(
     logits_exp_sum = logits_exp.sum(dim=-1, keepdim=True)
     log_probs = logits_adj - torch.log(logits_exp_sum)
     return -log_probs.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1).mean()
+
+
+class AdamW(torch.optim.Optimizer):
+    def __init__(self, params, lr=1e-3, betas=(0.9,0.95), weight_decay=0.99, eps=10e-8):
+        if lr < 0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        defaults = {
+            "lr": lr,
+            "b1": betas[0],
+            "b2": betas[1],
+            "decay": weight_decay,
+            "eps": eps,
+        }
+        super().__init__(params, defaults)
+
+    def step(self, closure: Callable | None = None) -> Any:
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            b1 = group["b1"]
+            b2 = group["b2"]
+            decay = group["decay"]
+            eps = group["eps"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+
+                state = self.state[p]
+                t = state.get("t", 1)
+                grad = p.grad.data
+                lr_t = lr * (math.sqrt(1 - b2**t) / (1 - b1**t))
+
+                # in-place weight decay
+                p.data -= lr * decay * p.data
+                # update moment estimates
+                m = state.get("m", torch.zeros_like(p.data))
+                v = state.get("v", torch.zeros_like(p.data))
+                m = b1 * m + (1 - b1) * grad
+                v = b2 * v + (1 - b2) * (grad**2)
+                state["m"] = m
+                state["v"] = v
+
+                # update weight tensor in-place.
+                p.data -= lr_t * (m / (v.sqrt() + eps))
+                # increment iteration number
+                state["t"] = t + 1
+        return loss

@@ -319,7 +319,7 @@ def cross_entropy_loss(
 
 
 class AdamW(torch.optim.Optimizer):
-    def __init__(self, params, lr=1e-3, betas=(0.9,0.95), weight_decay=0.99, eps=10e-8):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.95), weight_decay=0.99, eps=10e-8):
         if lr < 0:
             raise ValueError(f"Invalid learning rate: {lr}")
         defaults = {
@@ -363,3 +363,18 @@ class AdamW(torch.optim.Optimizer):
                 # increment iteration number
                 state["t"] = t + 1
         return loss
+
+
+# Section 4.4
+def lr_schedule_cosine_annealing(t: int, lr_max: float, lr_min: float, warmup_period: int, annealing_period: int):
+    '''
+    Cosine annealing schedule for learning rate
+    '''
+    assert warmup_period < annealing_period
+    if t < warmup_period:
+        return lr_max * t / warmup_period
+    elif t <= annealing_period:
+        annealed = 0.5 * (1 + (math.cos(math.pi * (t - warmup_period) / (annealing_period - warmup_period))))
+        return lr_min + (lr_max - lr_min) * annealed
+    else:
+        return lr_min

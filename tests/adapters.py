@@ -21,6 +21,7 @@ from cs336_basics.model import (
     TransformerBlock,
     TransformerLM,
     cross_entropy_loss,
+    lr_schedule_cosine_annealing,
     scaled_dot_product_attention,
     softmax,
 )
@@ -586,7 +587,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return lr_schedule_cosine_annealing(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(

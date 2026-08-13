@@ -1,11 +1,12 @@
 import math
-from typing import Any, Callable, Optional
+from collections.abc import Callable, Iterable
+from typing import Any
 
-from einops import rearrange
-from jaxtyping import Float, Int
-from einops.einops import einsum, reduce, repeat
-from torch import nn
 import torch
+from einops import rearrange
+from einops.einops import einsum, reduce, repeat
+from jaxtyping import Float, Int
+from torch import nn
 
 
 # Section 3.3.2
@@ -367,9 +368,9 @@ class AdamW(torch.optim.Optimizer):
 
 # Section 4.4
 def lr_schedule_cosine_annealing(t: int, lr_max: float, lr_min: float, warmup_period: int, annealing_period: int):
-    '''
+    """
     Cosine annealing schedule for learning rate
-    '''
+    """
     assert warmup_period < annealing_period
     if t < warmup_period:
         return lr_max * t / warmup_period
@@ -378,3 +379,13 @@ def lr_schedule_cosine_annealing(t: int, lr_max: float, lr_min: float, warmup_pe
         return lr_min + (lr_max - lr_min) * annealed
     else:
         return lr_min
+
+
+# Section 4.5
+def gradient_clipping(parameters: Iterable[torch.nn.Parameter], threshold: float, eps=10e-6):
+    max_norm = torch.linalg.norm(torch.cat([p.grad.flatten() for p in parameters if p.grad is not None]))
+    for parameter in parameters:
+        if parameter.grad is None:
+            continue
+        if max_norm > threshold:
+            parameter.grad *= threshold / (max_norm + eps)

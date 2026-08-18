@@ -2,6 +2,8 @@ import math
 from collections.abc import Callable, Iterable
 from typing import Any
 
+import numpy as np
+import numpy.typing as npt
 import torch
 from einops import rearrange
 from einops.einops import einsum, reduce, repeat
@@ -389,3 +391,15 @@ def gradient_clipping(parameters: Iterable[torch.nn.Parameter], threshold: float
             continue
         if max_norm > threshold:
             parameter.grad *= threshold / (max_norm + eps)
+
+
+# Section 5 - data loading
+def get_batch(
+    dataset: npt.NDArray, batch_size: int, context_length: int, device: str
+) -> tuple[Float[torch.Tensor, "b ctx"], Float[torch.Tensor, "b ctx"]]:
+    idx = np.random.randint(0, len(dataset) - context_length, size=batch_size)
+    # [3, 1, 8, ...] -> [[3, 4, 5, ...], [1, 2, 3, ...], [8, 9, 10, ...], ...]
+    idx_expanded = np.repeat(np.expand_dims(idx, axis=1), context_length, axis=1) + np.arange(context_length)
+    xs = torch.from_numpy(dataset[idx_expanded]).to(device)
+    ys = torch.from_numpy(dataset[idx_expanded + 1]).to(device)
+    return xs, ys

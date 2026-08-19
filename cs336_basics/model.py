@@ -1,6 +1,7 @@
 import math
 from collections.abc import Callable, Iterable
-from typing import Any
+from os import PathLike
+from typing import IO, Any, BinaryIO, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -8,7 +9,7 @@ import torch
 from einops import rearrange
 from einops.einops import einsum, reduce, repeat
 from jaxtyping import Float, Int
-from torch import nn
+from torch import nn, optim
 
 
 # Section 3.3.2
@@ -404,3 +405,25 @@ def get_batch(
     xs = torch.from_numpy(dataset[idx_expanded]).to(device)
     ys = torch.from_numpy(dataset[idx_expanded + 1]).to(device)
     return xs, ys
+
+
+# Section 5.2 - checkpointing
+class Checkpoint(TypedDict):
+    model: dict
+    optimizer: dict
+    iteration: int
+
+def save_checkpoint(model: nn.Module, optimizer: optim.Optimizer, iteration: int, out: str | PathLike | BinaryIO | IO[bytes]):
+    pack: Checkpoint = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "iteration": iteration,
+    }
+    torch.save(pack, out)
+
+def load_checkpoint(src: str|PathLike|BinaryIO|IO[bytes], model: nn.Module, optimizer: optim.Optimizer) -> int:
+    pack: Checkpoint = torch.load(src)
+    model.load_state_dict(pack["model"])
+    optimizer.load_state_dict(pack["optimizer"])
+    return pack["iteration"]
+

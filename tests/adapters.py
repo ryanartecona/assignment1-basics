@@ -23,7 +23,9 @@ from cs336_basics.model import (
     cross_entropy_loss,
     get_batch,
     gradient_clipping,
+    load_checkpoint,
     lr_schedule_cosine_annealing,
+    save_checkpoint,
     scaled_dot_product_attention,
     softmax,
 )
@@ -608,7 +610,7 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    return save_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -629,7 +631,7 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    return load_checkpoint(src, model, optimizer)
 
 
 def get_tokenizer(

@@ -63,7 +63,7 @@ class Embedding(nn.Module):
 class RMSNorm(nn.Module):
     d_model: int
     eps: float
-    gain: Float[torch.Tensor, "d_model"]
+    gain: Float[torch.Tensor, " d_model"]
 
     def __init__(
         self,
@@ -190,7 +190,8 @@ def scaled_dot_product_attention(
 ) -> Float[torch.Tensor, "... n d_v"]:
     d_k = q.shape[-1]
     inner = q @ k.transpose(-2, -1) / math.sqrt(d_k)
-    inner[mask == False] = float("-inf")
+    if mask is not None:
+        inner[~mask] = float("-inf")
     return softmax(inner, dim=-1) @ v
 
 

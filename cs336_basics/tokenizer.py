@@ -7,7 +7,9 @@ from multiprocessing import Pool
 from operator import itemgetter
 from pathlib import Path
 from posixpath import dirname
-from typing import ClassVar, Iterable, Iterator, Optional
+from line_profiler import profile
+from typing import ClassVar, Optional
+from collections.abc import Iterable, Iterator
 import regex as re
 
 PRETOKEN_PAT = (
@@ -171,6 +173,7 @@ class BPE:
             doc_occs[tuple(bytes([byte]) for byte in match_bytes)] += 1
         return doc_occs
 
+    @profile
     def train(self, text: str, vocab_size: int, special_tokens: list[str]) -> BPECodec:
         # init the vocabulary
         init_vocab = list(bytes([byte]) for byte in range(256))
@@ -205,11 +208,15 @@ class BPE:
             if not pair_occs:
                 break
 
+            # find new most common pair(s) to merge
             most_common_pairs = []
-            for _, group in groupby(pair_occs.most_common(), key=itemgetter(1)):
-                for pair, _ in group:
+            most_common_count = 0
+            for pair, count in pair_occs.items():
+                if count > most_common_count:
+                    most_common_count = count
+                    most_common_pairs = [pair]
+                elif count == most_common_count:
                     most_common_pairs.append(pair)
-                break  # only look at 1st group, i.e. tied most common pairs
 
             # stable tiebreak
             most_common_pair = max(most_common_pairs)
@@ -237,28 +244,23 @@ class BPE:
                 # create a new pretoken with the newly merged pair
                 pretoken_merged = list(pretoken_premerge)
                 for i, pair_index in enumerate(sorted(pair_indices)):
-                    merged_index = (
-                        pair_index - i
-                    )  # account for previously merged pairs shifting indices
+                    # account for previously merged pairs shifting indices
+                    merged_index = pair_index - i
+                    # merge the pair in place
                     pretoken_merged[merged_index : merged_index + 2] = [t1 + t2]
                 pretoken_merged = tuple(pretoken_merged)
 
                 # count occurrences of pairs in the old (premerge) pretoken and
                 # remove each corresponding index from pair_pretokens
-                premerge_pair_occs = Counter()
                 for i, (t1, t2) in enumerate(pairwise(pretoken_premerge)):
-                    premerge_pair_occs[t1, t2] += pretoken_occs[pretoken_premerge]
+                    pair_occs[t1, t2] -= pretoken_occs[pretoken_premerge]
                     pair_pretokens[t1, t2][pretoken_premerge].remove(i)
                 # count occurrences of pairs in the new (merged) pretoken and
                 # add each corresponding index to pair_pretokens
-                merged_pair_occs = Counter()
                 for i, (t1, t2) in enumerate(pairwise(pretoken_merged)):
-                    merged_pair_occs[t1, t2] += pretoken_occs[pretoken_premerge]
+                    pair_occs[t1, t2] += pretoken_occs[pretoken_premerge]
                     pair_pretokens[t1, t2][pretoken_merged].append(i)
 
-                # update pair occurrence counts by subtracting old counts and adding new counts
-                pair_occs -= premerge_pair_occs
-                pair_occs += merged_pair_occs
                 # update pretoken occurrence counts as if the byte pair was merged in place
                 pretoken_occs[pretoken_merged] += pretoken_occs[pretoken_premerge]
                 pretoken_occs[pretoken_premerge] = 0

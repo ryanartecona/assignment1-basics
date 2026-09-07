@@ -45,6 +45,10 @@ class BPECodec:
         ]
         return {"enc": enc_obj, "merges": merges_obj}
 
+    @property
+    def vocab_size(self):
+        return len(self.enc)
+
 
 # eq=False so the class is hashable (by identity) and supports @lru_cache method
 @dataclass(eq=False)
@@ -83,6 +87,10 @@ class Tokenizer:
             codec_json = json.load(f)
         codec = BPECodec.from_json(codec_json)
         return cls(codec.vocab, codec.merges, special_tokens)
+
+    @property
+    def vocab_size(self):
+        return len(self.vocab)
 
     @lru_cache(maxsize=2**16)
     def _merge_pretoken(self, pretoken: bytes) -> list[bytes]:

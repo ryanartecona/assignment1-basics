@@ -87,6 +87,7 @@ name = "cs336-basics"
 version = "26.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "einops" },
     { name = "einx" },
     { name = "jaxtyping" },
@@ -107,6 +108,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
     { name = "einops", specifier = ">=0.8" },
     { name = "einx", specifier = ">=0.4" },
     { name = "jaxtyping", specifier = ">=0.3" },

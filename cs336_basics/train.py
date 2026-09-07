@@ -1,0 +1,101 @@
+import json
+
+import click
+import numpy as np
+
+from pathlib import Path
+from cs336_basics.model import AdamW, TransformerLM
+from cs336_basics.tokenizer import BPE, BPECodec, Tokenizer
+
+
+readable_file = click.Path(exists=True, readable=True, path_type=Path, dir_okay=False)
+writable_file = click.Path(writable=True, path_type=Path, dir_okay=False)
+
+
+@click.group()
+def cli():
+    """A simple CLI application."""
+    pass
+
+
+@cli.group()
+def tokenizer():
+    """Tokenizer related commands."""
+    pass
+
+
+@tokenizer.command(name="train")
+@click.option("--vocab-size", default=10000, help="Vocabulary size for the tokenizer.")
+@click.option("--corpus-path", default=None, help="Path to the training corpus.", type=readable_file)
+@click.option("--output-path", default=None, help="Path to save the trained tokenizer.", type=writable_file)
+@click.option(
+    "--special-tokens", default=["<|endoftext|>"], help="Special tokens to include in the tokenizer.", multiple=True
+)
+def tokenizer_train(vocab_size, corpus_path, output_path, special_tokens):
+    """Train a tokenizer."""
+    click.echo(f"reading file {corpus_path.absolute().relative_to(Path.cwd())} ...")
+    corpus_text = corpus_path.read_text()
+    click.echo("training BPE tokenizer...")
+    codec = BPE().train(
+        corpus_text,
+        vocab_size=vocab_size,
+        special_tokens=special_tokens,
+    )
+    json.dump(
+        codec.to_json(),
+        open(output_path, "w"),
+        indent=2,
+    )
+    click.echo(f"saved tokenizer codec to {output_path}")
+
+
+@tokenizer.command(name="test-roundtrip")
+@click.option(
+    "--codec-path",
+    default=None,
+    help="Path to the trained tokenizer codec.",
+    type=readable_file,
+)
+@click.option("--test-string", default="Hello tokenizer!", help="String to test the tokenizer roundtrip.")
+def tokenizer_test_roundtrip(codec_path: Path, test_string: str):
+    # hacky roundtrip test of Tokenizer.from_file and BPECodec
+    t = Tokenizer.from_file(codec_path)
+    test = t.decode(t.encode(test_string))
+    click.echo(f"test roundtrip output: {repr(test)}")
+
+
+@cli.command()
+@click.option("--codec-path", required=True, help="Path to the trained tokenizer codec.", type=readable_file)
+@click.option("--corpus-path", required=True, help="Path to the training corpus.", type=readable_file)
+@click.option("--d-model", default=512, help="Dimension of the model.")
+@click.option("--n-layers", default=6, help="Number of layers in the model.")
+@click.option("--context-length", default=128, help="Context length for the model.")
+@click.option("--d-ff", default=2048, help="Dimension of the feedforward network.")
+@click.option("--n-heads", default=8, help="Number of attention heads in the feedforward network.")
+@click.option("--rope-theta", default=10000, help="RoPE theta value.")
+def train(codec_path, corpus_path, d_model, n_layers, context_length, d_ff, n_heads, rope_theta):
+    """Train a model with provided config."""
+    click.echo("Loading tokenizer codec...")
+    tokenizer = Tokenizer.from_file(codec_path)
+    corpus_text = corpus_path.read_text()
+    # TODO: pre-encode whole corpus efficiently
+    corpus_toks = tokenizer.encode(corpus_text[:1000])
+    click.echo("Initializing model and optimizer...")
+    model = TransformerLM(
+        vocab_size=tokenizer.vocab_size,
+        d_model=d_model,
+        context_length=context_length,
+        d_ff=d_ff,
+        n_heads=n_heads,
+        n_layers=n_layers,
+        rope_theta=rope_theta,
+    )
+    np.array(corpus_toks, dtype=np.int32)
+    optimizer = AdamW(model.parameters())
+    click.echo("Model and optimizer initialized with the following parameters:")
+    for param in model.parameters():
+        click.echo(f"  {param.shape}")
+
+
+if __name__ == "__main__":
+    cli()

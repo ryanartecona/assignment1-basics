@@ -1,16 +1,16 @@
+import json
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
-from itertools import groupby, pairwise
-import json
+from itertools import pairwise
 from multiprocessing import Pool
-from operator import itemgetter
 from pathlib import Path
-from posixpath import dirname
-from line_profiler import profile
-from typing import ClassVar, Optional
-from collections.abc import Iterable, Iterator
+from typing import ClassVar, Optional, TypeVar, cast
+
 import regex as re
+from line_profiler import profile
+from sortedcontainers import SortedSet
 
 PRETOKEN_PAT = (
     r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -161,6 +161,84 @@ class Tokenizer:
             "utf-8", errors="replace"
         )
 
+T = TypeVar('T')
+    
+class TopCounter[T]:
+    '''A counter that keeps track of the top items by count. It supports adding 
+    and removing items, and retrieving the top item.
+
+    >>> tc = TopCounter[str]()
+    >>> tc['apple'] = 3
+    >>> tc['banana'] = 5
+    >>> tc.top()
+    (5, 'banana')
+    >>> tc['apple'] += 2
+    >>> tc.top()
+    (5, 'banana')
+    >>> tc['banana'] -= 5
+    >>> tc.top()
+    (5, 'apple')
+    >>> bool(tc)
+    True
+    >>> len(tc)
+    1
+    >>> tc['apple'] -= 5
+    >>> bool(tc)
+    False
+    '''
+
+    def __init__(self):
+        self._counts = Counter()
+        self.topitems = SortedSet()
+
+    def __getitem__(self, item: T):
+        return self.counts[item]
+
+    def __setitem__(self, item: T, count: int):
+        old_count = self.counts[item]
+        if (old_count, item) in self.topitems:
+            self.topitems.remove((old_count, item))
+        if count > 0:
+            self.topitems.add((count, item))
+            self.counts[item] = count
+        else:
+            del self.counts[item]
+
+    def __iadd__(self, item: T, amount: int):
+        new_count = self.counts[item] + amount
+        assert new_count > 0, f"Cannot add negative amount ({amount}) to item with current count ({self.counts[item]})"
+        self.__setitem__(item, self.counts[item] + amount)
+        return self
+
+    def __isub__(self, item: T, amount: int):
+        new_count = self.counts[item] - amount
+        assert new_count >= 0, f"Cannot subtract more than current count ({self.counts[item]}) amount ({amount})"
+        self.__setitem__(item, new_count)
+        return self
+
+    def __len__(self):
+        return len(self.counts)
+
+    def __bool__(self):
+        return bool(self.counts)
+
+    def top(self) -> tuple[int, T]:
+        '''Return the top item and its count. Raises ValueError if the
+        TopCounter is empty. In the case of ties, returns the item corresponding
+        to max(tie_items) as a stable tiebreak.
+        '''
+        if not self.topitems:
+            raise ValueError("TopCounter is empty")
+        return cast(tuple[int, T], self.topitems[-1])
+
+    @property
+    def counts(self):
+        return self._counts
+
+    @counts.setter
+    def counts(self, new_counts):
+        self._counts = new_counts
+        self.topitems = SortedSet((count, item) for item, count in new_counts.items() if count > 0)
 
 @dataclass
 class BPE:
@@ -194,7 +272,7 @@ class BPE:
         # count occurrences of byte pairs within pretokens, and track the index
         # into each pretoken where each pair occurs, so we can efficiently
         # update counts after merging
-        pair_occs = Counter()
+        pair_occs = TopCounter[tuple[bytes, bytes]]()
         pair_pretokens = defaultdict(lambda: defaultdict(list))
         for pretoken in pretoken_occs:
             for i, (t1, t2) in enumerate(pairwise(pretoken)):
@@ -208,27 +286,16 @@ class BPE:
             if not pair_occs:
                 break
 
-            # find new most common pair(s) to merge
-            most_common_pairs = []
-            most_common_count = 0
-            for pair, count in pair_occs.items():
-                if count > most_common_count:
-                    most_common_count = count
-                    most_common_pairs = [pair]
-                elif count == most_common_count:
-                    most_common_pairs.append(pair)
-
-            # stable tiebreak
-            most_common_pair = max(most_common_pairs)
+            most_common_count, most_common_pair = pair_occs.top()
 
             # record a vocab word for the new merged pair, and the merge itself
             t1, t2 = most_common_pair
             enc[next_i] = t1 + t2
             dec[t1 + t2] = next_i
             merges.append((t1, t2))
-            pair_occs[most_common_pair] = 0
             next_i += 1
 
+            pair_occ_updates = pair_occs.counts
             # update the pretoken occurrences with the new merged tokens
             for pretoken_premerge, pair_indices in pair_pretokens[
                 most_common_pair
@@ -253,44 +320,20 @@ class BPE:
                 # count occurrences of pairs in the old (premerge) pretoken and
                 # remove each corresponding index from pair_pretokens
                 for i, (t1, t2) in enumerate(pairwise(pretoken_premerge)):
-                    pair_occs[t1, t2] -= pretoken_occs[pretoken_premerge]
+                    pair_occ_updates[t1, t2] -= pretoken_occs[pretoken_premerge]
                     pair_pretokens[t1, t2][pretoken_premerge].remove(i)
                 # count occurrences of pairs in the new (merged) pretoken and
                 # add each corresponding index to pair_pretokens
                 for i, (t1, t2) in enumerate(pairwise(pretoken_merged)):
-                    pair_occs[t1, t2] += pretoken_occs[pretoken_premerge]
+                    # pair_occs[t1, t2] += pretoken_occs[pretoken_premerge]
+                    pair_occ_updates[t1, t2] += pretoken_occs[pretoken_premerge]
                     pair_pretokens[t1, t2][pretoken_merged].append(i)
 
                 # update pretoken occurrence counts as if the byte pair was merged in place
                 pretoken_occs[pretoken_merged] += pretoken_occs[pretoken_premerge]
                 pretoken_occs[pretoken_premerge] = 0
 
+            # apply accumulated occurrence count changes from all pretoken merges
+            pair_occs.counts = pair_occ_updates
+
         return BPECodec(enc, merges)
-
-
-if __name__ == "__main__":
-    # name = "TinyStoriesV2-GPT4-train"
-    name = "TinyStoriesV2-GPT4-valid"
-    corpus_path = Path(dirname(__file__)) / ".." / "data" / f"{name}.txt"
-    dump_path = Path(dirname(__file__)) / f"{name}-bpe.json"
-
-    # Train a BPECodec on the above corpus and save it
-    # print(f"reading file {corpus_path.absolute().relative_to(Path.cwd())} ...")
-    # corpus_text = corpus_path.read_text()
-    # print("training BPE tokenizer...")
-    # codec = BPE().train(
-    #     corpus_text,
-    #     vocab_size=10_000,
-    #     special_tokens=["<|endoftext|>"],
-    # )
-    # json.dump(
-    #     codec.to_json(),
-    #     open(dump_path, "w"),
-    #     indent=2,
-    # )
-    # print(f"dumped json to {dump_path.relative_to(Path.cwd())}")
-
-    # hacky roundtrip test of Tokenizer.from_file and BPECodec
-    t = Tokenizer.from_file(dump_path)
-    test = t.decode(t.encode("My name is Ryan!"))
-    print("TEST roundtrip:", repr(test))

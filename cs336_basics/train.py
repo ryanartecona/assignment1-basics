@@ -41,11 +41,15 @@ def tokenizer_train(vocab_size, corpus_path, output_path, special_tokens):
         vocab_size=vocab_size,
         special_tokens=special_tokens,
     )
-    json.dump(
-        codec.to_json(),
-        open(output_path, "w"),
-        indent=2,
-    )
+    if output_path.suffix == ".pkl":
+        with open(output_path, "wb") as f:
+            f.write(codec.to_pickle())
+    else:
+        json.dump(
+            codec.to_json(),
+            open(output_path, "w"),
+            indent=2,
+        )
     click.echo(f"saved tokenizer codec to {output_path}")
 
 
@@ -62,6 +66,25 @@ def tokenizer_test_roundtrip(codec_path: Path, test_string: str):
     t = Tokenizer.from_file(codec_path)
     test = t.decode(t.encode(test_string))
     click.echo(f"test roundtrip output: {repr(test)}")
+
+
+@tokenizer.command(name="encode-dataset")
+@click.option("--codec-path", required=True, help="Path to the trained tokenizer codec.", type=readable_file)
+@click.option("--corpus-path", required=True, help="Path to the training corpus.", type=readable_file)
+@click.option(
+    "--special-tokens", default=["<|endoftext|>"], help="Special tokens to include in the tokenizer.", multiple=True
+)
+@click.option("--output-path", required=True, help="Path to save the encoded dataset.", type=writable_file)
+def tokenizer_encode_dataset(codec_path: Path, corpus_path: Path, special_tokens: list[str], output_path: Path):
+    """Encode a dataset using the trained tokenizer."""
+    click.echo(f"reading file {corpus_path.absolute().relative_to(Path.cwd())} ...")
+    corpus_text = corpus_path.read_text()
+    click.echo("loading tokenizer codec...")
+    tokenizer = Tokenizer.from_file(codec_path, special_tokens=special_tokens)
+    click.echo("encoding dataset...")
+    encoded_dataset = tokenizer.encode(corpus_text)
+    np.save(output_path, np.array(encoded_dataset, dtype=np.int32))
+    click.echo(f"saved encoded dataset to {output_path}")
 
 
 @cli.command()

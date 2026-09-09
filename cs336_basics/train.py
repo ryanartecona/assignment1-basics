@@ -83,7 +83,7 @@ def tokenizer_encode_dataset(codec_path: Path, corpus_path: Path, special_tokens
     tokenizer = Tokenizer.from_file(codec_path, special_tokens=special_tokens)
     click.echo("encoding dataset...")
     encoded_dataset = tokenizer.encode(corpus_text)
-    np.save(output_path, np.array(encoded_dataset, dtype=np.int32))
+    np.save(output_path, np.array(encoded_dataset, dtype=np.uint16))
     click.echo(f"saved encoded dataset to {output_path}")
 
 

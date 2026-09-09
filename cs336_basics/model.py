@@ -274,8 +274,8 @@ class TransformerBlock(nn.Module):
         self.ff_block.add_module("ffn", SwiGLU(d_model, d_ff))
 
     def forward(self, x: Float[torch.Tensor, "... n d_model"]) -> Float[torch.Tensor, "... n d_model"]:
-        x += self.attn_block(x)
-        x += self.ff_block(x)
+        x = x + self.attn_block(x)
+        x = x + self.ff_block(x)
         return x
 
 
@@ -402,8 +402,8 @@ def get_batch(
     idx = np.random.randint(0, len(dataset) - context_length, size=batch_size)
     # [3, 1, 8, ...] -> [[3, 4, 5, ...], [1, 2, 3, ...], [8, 9, 10, ...], ...]
     idx_expanded = np.repeat(np.expand_dims(idx, axis=1), context_length, axis=1) + np.arange(context_length)
-    xs = torch.from_numpy(dataset[idx_expanded]).to(device)
-    ys = torch.from_numpy(dataset[idx_expanded + 1]).to(device)
+    xs = torch.from_numpy(dataset[idx_expanded]).to(device, dtype=torch.int32)
+    ys = torch.from_numpy(dataset[idx_expanded + 1]).to(device, dtype=torch.int32)
     return xs, ys
 
 

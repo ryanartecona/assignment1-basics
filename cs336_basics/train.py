@@ -4,7 +4,9 @@ import click
 import numpy as np
 
 from pathlib import Path
-from cs336_basics.model import AdamW, TransformerLM
+
+import torch
+from cs336_basics.model import AdamW, TransformerLM, cross_entropy_loss, get_batch
 from cs336_basics.tokenizer import BPE, BPECodec, Tokenizer
 
 
@@ -100,9 +102,9 @@ def train(codec_path, corpus_path, d_model, n_layers, context_length, d_ff, n_he
     """Train a model with provided config."""
     click.echo("Loading tokenizer codec...")
     tokenizer = Tokenizer.from_file(codec_path)
-    corpus_text = corpus_path.read_text()
-    # TODO: pre-encode whole corpus efficiently
-    corpus_toks = tokenizer.encode(corpus_text[:1000])
+    corpus_toks = np.memmap(dtype=np.uint16, filename=corpus_path, mode="r")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    torch.set_default_device(device)
     click.echo("Initializing model and optimizer...")
     model = TransformerLM(
         vocab_size=tokenizer.vocab_size,
@@ -113,11 +115,16 @@ def train(codec_path, corpus_path, d_model, n_layers, context_length, d_ff, n_he
         n_layers=n_layers,
         rope_theta=rope_theta,
     )
-    np.array(corpus_toks, dtype=np.int32)
     optimizer = AdamW(model.parameters())
-    click.echo("Model and optimizer initialized with the following parameters:")
-    for param in model.parameters():
-        click.echo(f"  {param.shape}")
+    click.echo("Model and optimizer initialized.")
+    for i in range(10):
+        batch_x, batch_y = get_batch(corpus_toks, context_length=context_length, batch_size=32, device=str(device))
+        logits = model.forward(batch_x)
+        loss = cross_entropy_loss(logits, batch_y)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        click.echo(f"Step {i+1}/10 completed.")
 
 
 if __name__ == "__main__":

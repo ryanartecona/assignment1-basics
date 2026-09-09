@@ -29,7 +29,7 @@ class BPECodec:
     @classmethod
     def from_json(cls, obj):
         enc = {
-            i: tok.encode("utf-8", errors="replace") for i, tok in obj["enc"].items()
+            int(i): tok.encode("utf-8", errors="replace") for i, tok in obj["enc"].items()
         }
         merges = [
             (t1.encode("utf-8", errors="replace"), t2.encode("utf-8", errors="replace"))
@@ -75,7 +75,7 @@ class Tokenizer:
         )
         special_vocab = {
             i + next_vocab_index: tok.encode("utf-8")
-            for i, tok in enumerate(self.special_tokens)
+            for i, tok in enumerate(self.special_tokens or [])
         }
         super().__setattr__("dec", self.vocab | special_vocab)
         super().__setattr__("enc", {b: i for i, b in self.vocab.items()})

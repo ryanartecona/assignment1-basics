@@ -6,8 +6,8 @@ import numpy as np
 from pathlib import Path
 
 import torch
-from cs336_basics.model import AdamW, TransformerLM, cross_entropy_loss, get_batch
-from cs336_basics.tokenizer import BPE, BPECodec, Tokenizer
+from cs336_basics.model import AdamW, TransformerLM, cross_entropy_loss, get_batch, lr_schedule_cosine_annealing
+from cs336_basics.tokenizer import BPE, Tokenizer
 
 
 readable_file = click.Path(exists=True, readable=True, path_type=Path, dir_okay=False)
@@ -98,7 +98,8 @@ def tokenizer_encode_dataset(codec_path: Path, corpus_path: Path, special_tokens
 @click.option("--d-ff", default=2048, help="Dimension of the feedforward network.")
 @click.option("--n-heads", default=8, help="Number of attention heads in the feedforward network.")
 @click.option("--rope-theta", default=10000, help="RoPE theta value.")
-def train(codec_path, corpus_path, d_model, n_layers, context_length, d_ff, n_heads, rope_theta):
+@click.option("--steps", default=100, help="Number of training steps.")
+def train(codec_path, corpus_path, d_model, n_layers, context_length, d_ff, n_heads, rope_theta, steps):
     """Train a model with provided config."""
     click.echo("Loading tokenizer codec...")
     tokenizer = Tokenizer.from_file(codec_path)
@@ -117,14 +118,18 @@ def train(codec_path, corpus_path, d_model, n_layers, context_length, d_ff, n_he
     )
     optimizer = AdamW(model.parameters())
     click.echo("Model and optimizer initialized.")
-    for i in range(10):
+    warmup_steps = steps // 10
+    for i in range(steps):
         batch_x, batch_y = get_batch(corpus_toks, context_length=context_length, batch_size=32, device=str(device))
         logits = model.forward(batch_x)
         loss = cross_entropy_loss(logits, batch_y)
         loss.backward()
+        lr = lr_schedule_cosine_annealing(i, lr_max=1e-2, lr_min=5e-4, warmup_period=warmup_steps, annealing_period=steps)
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr
         optimizer.step()
         optimizer.zero_grad()
-        click.echo(f"Step {i+1}/10 completed.")
+        click.echo(f"Step {i+1}/10 completed. loss: {loss.mean().item():0.5f}, lr: {lr:0.3e}")
 
 
 if __name__ == "__main__":

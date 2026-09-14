@@ -74,6 +74,9 @@ class Tokenizer:
 
     PRETOKEN_PAT: ClassVar[str] = PRETOKEN_PAT
 
+    # hardcode this for now, since we don't explicitly designate a pad token in vocab creation
+    pad_token_id: ClassVar[int] = 0
+
     def __post_init__(self):
         next_vocab_index = max(self.vocab.keys())
         # in case some special tokens are substrings of other special tokens,

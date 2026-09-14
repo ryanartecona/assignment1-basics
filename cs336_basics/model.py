@@ -10,6 +10,9 @@ from einops import rearrange
 from einops.einops import einsum, reduce, repeat
 from jaxtyping import Float, Int
 from torch import nn, optim
+from torch.nn import functional as F
+
+from cs336_basics.tokenizer import Tokenizer
 
 
 # Section 3.3.2
@@ -413,7 +416,10 @@ class Checkpoint(TypedDict):
     optimizer: dict
     iteration: int
 
-def save_checkpoint(model: nn.Module, optimizer: optim.Optimizer, iteration: int, out: str | PathLike | BinaryIO | IO[bytes]):
+
+def save_checkpoint(
+    model: nn.Module, optimizer: optim.Optimizer, iteration: int, out: str | PathLike | BinaryIO | IO[bytes]
+):
     pack: Checkpoint = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
@@ -421,9 +427,37 @@ def save_checkpoint(model: nn.Module, optimizer: optim.Optimizer, iteration: int
     }
     torch.save(pack, out)
 
-def load_checkpoint(src: str|PathLike|BinaryIO|IO[bytes], model: nn.Module, optimizer: optim.Optimizer) -> int:
+
+def load_checkpoint(src: str | PathLike | BinaryIO | IO[bytes], model: nn.Module, optimizer: optim.Optimizer) -> int:
     pack: Checkpoint = torch.load(src)
     model.load_state_dict(pack["model"])
     optimizer.load_state_dict(pack["optimizer"])
     return pack["iteration"]
 
+
+# Experimentation - decoding from a model
+def complete(model: TransformerLM, tokenizer: Tokenizer, prompts: list[str], max_length: int = 100) -> list[str]:
+    model.eval()
+    with torch.no_grad():
+        device = next(model.parameters()).device
+        prompts_toks = [tokenizer.encode(prompt) for prompt in prompts]
+        max_prompt_len = max(len(toks) for toks in prompts_toks)
+        prompts_batch = torch.stack(
+            [
+                F.pad(
+                    torch.tensor(prompt_toks, dtype=torch.int32),
+                    (max_prompt_len - len(prompt_toks), 0),
+                    value=tokenizer.pad_token_id,
+                )
+                for prompt_toks in prompts_toks
+            ],
+            dim=0,
+        )
+        next_tokens = torch.zeros((len(prompts), max_length), dtype=torch.int32, device=device)
+        for i in range(max_length):
+            logits = model(prompts_batch)
+            next_token_logits = logits[:, -1, :]
+            next_token_ids = torch.argmax(next_token_logits, dim=-1)
+            next_tokens[:, i] = next_token_ids
+            prompts_batch = torch.cat((prompts_batch, next_token_ids[..., None]), dim=1)
+        return [tokenizer.decode(token_ids.tolist()) for token_ids in next_tokens]

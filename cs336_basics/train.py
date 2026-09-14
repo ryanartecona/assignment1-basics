@@ -1,4 +1,5 @@
 import json
+from pprint import pformat
 
 import click
 import numpy as np
@@ -6,7 +7,15 @@ import numpy as np
 from pathlib import Path
 
 import torch
-from cs336_basics.model import AdamW, TransformerLM, cross_entropy_loss, get_batch, lr_schedule_cosine_annealing
+from cs336_basics.model import (
+    AdamW,
+    TransformerLM,
+    complete,
+    cross_entropy_loss,
+    get_batch,
+    lr_schedule_cosine_annealing,
+    save_checkpoint,
+)
 from cs336_basics.tokenizer import BPE, Tokenizer
 
 
@@ -91,15 +100,44 @@ def tokenizer_encode_dataset(codec_path: Path, corpus_path: Path, special_tokens
 
 @cli.command()
 @click.option("--codec-path", required=True, help="Path to the trained tokenizer codec.", type=readable_file)
-@click.option("--corpus-path", required=True, help="Path to the training corpus.", type=readable_file)
+@click.option("--model-path", required=True, help="Path to write the initial checkpoint.", type=writable_file)
 @click.option("--d-model", default=512, help="Dimension of the model.")
 @click.option("--n-layers", default=6, help="Number of layers in the model.")
 @click.option("--context-length", default=128, help="Context length for the model.")
 @click.option("--d-ff", default=2048, help="Dimension of the feedforward network.")
 @click.option("--n-heads", default=8, help="Number of attention heads in the feedforward network.")
 @click.option("--rope-theta", default=10000, help="RoPE theta value.")
+def init(codec_path, model_path, d_model, n_layers, context_length, d_ff, n_heads, rope_theta):
+    """Initialize a model with provided config."""
+    click.echo("Loading tokenizer codec...")
+    tokenizer = Tokenizer.from_file(codec_path)
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    torch.set_default_device(device)
+    click.echo("Initializing model and optimizer...")
+    hyperparams = {
+        "vocab_size": tokenizer.vocab_size,
+        "d_model": d_model,
+        "context_length": context_length,
+        "d_ff": d_ff,
+        "n_heads": n_heads,
+        "n_layers": n_layers,
+        "rope_theta": rope_theta,
+    }
+    model = TransformerLM(**hyperparams)
+    optimizer = AdamW(model.parameters())
+    click.echo(f"Model and optimizer initialized with parameters:\n{pformat(hyperparams)}")
+    save_checkpoint(model, optimizer, iteration=0, out=model_path)
+    click.echo(f"Model saved to {model_path}")
+
+
+# TODO: take the model init stuff out of this, so init is separate from a train step
+@cli.command()
+@click.option("--codec-path", required=True, help="Path to the trained tokenizer codec.", type=readable_file)
+@click.option("--corpus-path", required=True, help="Path to the training corpus.", type=readable_file)
+@click.option("--model-path", required=True, help="Path to load the initial checkpoint.", type=readable_file)
 @click.option("--steps", default=100, help="Number of training steps.")
-def train(codec_path, corpus_path, d_model, n_layers, context_length, d_ff, n_heads, rope_theta, steps):
+@click.option("--checkpoint-every", default=1000, help="How many steps between checkpoints.")
+def train(codec_path, corpus_path, steps):
     """Train a model with provided config."""
     click.echo("Loading tokenizer codec...")
     tokenizer = Tokenizer.from_file(codec_path)
@@ -119,17 +157,30 @@ def train(codec_path, corpus_path, d_model, n_layers, context_length, d_ff, n_he
     optimizer = AdamW(model.parameters())
     click.echo("Model and optimizer initialized.")
     warmup_steps = steps // 10
+    click.echo("Test completions at init:")
+    prompt = "Once upon a time there was"
+    completions = complete(model, tokenizer=tokenizer, prompts=[prompt] * 5, max_length=10)
+    click.echo(f"  {prompt}")
+    click.echo("\n".join([f"  ...{completion}" for completion in completions]))
+    click.echo("Training commencing...")
+    model.train()
     for i in range(steps):
         batch_x, batch_y = get_batch(corpus_toks, context_length=context_length, batch_size=32, device=str(device))
         logits = model.forward(batch_x)
         loss = cross_entropy_loss(logits, batch_y)
         loss.backward()
-        lr = lr_schedule_cosine_annealing(i, lr_max=1e-2, lr_min=5e-4, warmup_period=warmup_steps, annealing_period=steps)
+        lr = lr_schedule_cosine_annealing(
+            i, lr_max=1e-2, lr_min=5e-4, warmup_period=warmup_steps, annealing_period=steps
+        )
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
         optimizer.step()
         optimizer.zero_grad()
-        click.echo(f"Step {i+1}/10 completed. loss: {loss.mean().item():0.5f}, lr: {lr:0.3e}")
+        click.echo(f"Step {i + 1}/10 completed. loss: {loss.mean().item():0.5f}, lr: {lr:0.3e}")
+    click.echo("Test completions after training:")
+    completions = complete(model, tokenizer=tokenizer, prompts=[prompt] * 5, max_length=10)
+    click.echo(f"  {prompt}")
+    click.echo("\n".join([f"  ...{completion}" for completion in completions]))
 
 
 if __name__ == "__main__":

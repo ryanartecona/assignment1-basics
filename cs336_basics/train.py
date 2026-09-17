@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 from cs336_basics.model import (
     AdamW,
+    Checkpoint,
     TransformerLM,
     complete,
     cross_entropy_loss,
@@ -134,38 +135,31 @@ def init(codec_path, model_path, d_model, n_layers, context_length, d_ff, n_head
 @cli.command()
 @click.option("--codec-path", required=True, help="Path to the trained tokenizer codec.", type=readable_file)
 @click.option("--corpus-path", required=True, help="Path to the training corpus.", type=readable_file)
-@click.option("--model-path", required=True, help="Path to load the initial checkpoint.", type=readable_file)
+@click.option("--checkpoint-path", required=True, help="Path to load the initial checkpoint.", type=readable_file)
 @click.option("--steps", default=100, help="Number of training steps.")
+@click.option("--warmup-steps", default=10, help="Number of steps in initial warmup period.")
 @click.option("--checkpoint-every", default=1000, help="How many steps between checkpoints.")
-def train(codec_path, corpus_path, steps):
+@click.option(
+    "--special-tokens", default=["<|endoftext|>"], help="Special tokens to include in the tokenizer.", multiple=True
+)
+def train(codec_path, corpus_path, checkpoint_path, steps, warmup_steps, checkpoint_every, special_tokens):
     """Train a model with provided config."""
     click.echo("Loading tokenizer codec...")
-    tokenizer = Tokenizer.from_file(codec_path)
+    tokenizer = Tokenizer.from_file(codec_path, special_tokens=special_tokens)
     corpus_toks = np.memmap(dtype=np.uint16, filename=corpus_path, mode="r")
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.set_default_device(device)
-    click.echo("Initializing model and optimizer...")
-    model = TransformerLM(
-        vocab_size=tokenizer.vocab_size,
-        d_model=d_model,
-        context_length=context_length,
-        d_ff=d_ff,
-        n_heads=n_heads,
-        n_layers=n_layers,
-        rope_theta=rope_theta,
-    )
+    click.echo("Loading model and optimizer...")
+    cp: Checkpoint = torch.load(checkpoint_path, mmap=True)
+    model = TransformerLM.from_state_dict(cp["model"])
     optimizer = AdamW(model.parameters())
-    click.echo("Model and optimizer initialized.")
-    warmup_steps = steps // 10
-    click.echo("Test completions at init:")
-    prompt = "Once upon a time there was"
-    completions = complete(model, tokenizer=tokenizer, prompts=[prompt] * 5, max_length=10)
-    click.echo(f"  {prompt}")
-    click.echo("\n".join([f"  ...{completion}" for completion in completions]))
+    optimizer.load_state_dict(cp["optimizer"])
+    iter = cp["iteration"]
+    click.echo("Model and optimizer loaded.")
     click.echo("Training commencing...")
     model.train()
-    for i in range(steps):
-        batch_x, batch_y = get_batch(corpus_toks, context_length=context_length, batch_size=32, device=str(device))
+    for i in range(iter, iter + steps):
+        batch_x, batch_y = get_batch(corpus_toks, context_length=model.context_length, batch_size=32, device=str(device))
         logits = model.forward(batch_x)
         loss = cross_entropy_loss(logits, batch_y)
         loss.backward()
@@ -178,7 +172,8 @@ def train(codec_path, corpus_path, steps):
         optimizer.zero_grad()
         click.echo(f"Step {i + 1}/10 completed. loss: {loss.mean().item():0.5f}, lr: {lr:0.3e}")
     click.echo("Test completions after training:")
-    completions = complete(model, tokenizer=tokenizer, prompts=[prompt] * 5, max_length=10)
+    prompt = "Once upon a time"
+    completions = complete(model, tokenizer=tokenizer, prompts=[prompt] * 5, max_length=100, temperature=0.95)
     click.echo(f"  {prompt}")
     click.echo("\n".join([f"  ...{completion}" for completion in completions]))
 

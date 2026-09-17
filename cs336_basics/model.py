@@ -149,11 +149,13 @@ class RoPE(nn.Module):
         self.theta = theta
         self.max_seq_len = max_seq_len
         self.d_k = d_k
+        self.regen_cache()
 
+    def regen_cache(self):
         # prefill 2d cos(theta[i,k]) and sin(theta[i,k]) lookups
-        i = torch.arange(max_seq_len)
-        k = torch.arange(1, 1 + d_k // 2)
-        thetas = torch.outer(i, torch.pow(self.theta, -(2 * k - 2) / d_k))
+        i = torch.arange(self.max_seq_len)
+        k = torch.arange(1, 1 + self.d_k // 2)
+        thetas = torch.outer(i, torch.pow(self.theta, -(2 * k - 2) / self.d_k))
         sin_thetas = repeat(torch.sin(thetas), "i k -> i (k 2)")
         cos_thetas = repeat(torch.cos(thetas), "i k -> i (k 2)")
 
@@ -300,10 +302,17 @@ class TransformerLM(nn.Module):
         context_length: int,
     ):
         super().__init__()
+        self.hyper = nn.Parameter(
+            torch.tensor(
+                [vocab_size, d_model, n_heads, d_ff, n_layers, rope_theta, context_length], dtype=torch.float32
+            )
+        )
         self.token_embeddings = Embedding(vocab_size, d_model)
         d_k = d_model // n_heads
-        rope = RoPE(theta=rope_theta, d_k=d_k, max_seq_len=context_length)
-        self.layers = nn.Sequential(*[TransformerBlock(d_model, n_heads, d_ff, rope=rope) for _ in range(n_layers)])
+        self.rope = RoPE(theta=rope_theta, d_k=d_k, max_seq_len=context_length)
+        self.layers = nn.Sequential(
+            *[TransformerBlock(d_model, n_heads, d_ff, rope=self.rope) for _ in range(n_layers)]
+        )
         self.ln_final = RMSNorm(d_model)
         self.lm_out = Linear(d_model, vocab_size)
 
@@ -313,6 +322,28 @@ class TransformerLM(nn.Module):
         out = self.ln_final(res)
         logits = self.lm_out(out)
         return logits
+
+    @classmethod
+    def from_state_dict(cls, state: dict[str, torch.Tensor]):
+        vocab_size = int(state["hyper"][0])
+        d_model = int(state["hyper"][1])
+        n_heads = int(state["hyper"][2])
+        d_ff = int(state["hyper"][3])
+        n_layers = int(state["hyper"][4])
+        rope_theta = float(state["hyper"][5])
+        context_length = int(state["hyper"][6])
+
+        # https://docs.pytorch.org/tutorials/recipes/recipes/module_load_state_dict_tips.html
+        with torch.device("meta"):
+            model = cls(vocab_size, d_model, n_heads, d_ff, n_layers, rope_theta, context_length)
+        model.load_state_dict(state, assign=True)
+        # needs to happen outside of 'meta' device
+        model.rope.regen_cache()
+        return model
+
+    @property
+    def context_length(self):
+        return int(self.hyper[6].item())
 
 
 def cross_entropy_loss(
@@ -436,7 +467,9 @@ def load_checkpoint(src: str | PathLike | BinaryIO | IO[bytes], model: nn.Module
 
 
 # Experimentation - decoding from a model
-def complete(model: TransformerLM, tokenizer: Tokenizer, prompts: list[str], max_length: int = 100) -> list[str]:
+def complete(
+    model: TransformerLM, tokenizer: Tokenizer, prompts: list[str], max_length: int = 100, temperature=0.9
+) -> list[str]:
     model.eval()
     with torch.no_grad():
         device = next(model.parameters()).device
@@ -445,7 +478,7 @@ def complete(model: TransformerLM, tokenizer: Tokenizer, prompts: list[str], max
         prompts_batch = torch.stack(
             [
                 F.pad(
-                    torch.tensor(prompt_toks, dtype=torch.int32),
+                    torch.tensor(prompt_toks, dtype=torch.int32, device=device),
                     (max_prompt_len - len(prompt_toks), 0),
                     value=tokenizer.pad_token_id,
                 )
@@ -453,11 +486,21 @@ def complete(model: TransformerLM, tokenizer: Tokenizer, prompts: list[str], max
             ],
             dim=0,
         )
-        next_tokens = torch.zeros((len(prompts), max_length), dtype=torch.int32, device=device)
+        next_tokens = torch.zeros((len(prompts), max_length*2), dtype=torch.int32, device=device)
+        # next_tokens = torch.zeros((len(prompts), max_length*2), dtype=torch.int32, device=device)
+        ended = torch.zeros((len(prompts),), dtype=torch.bool, device=device)
+        # print("eot token:", tokenizer.encode("<|endoftext|>"))
+        endoftext_tok = tokenizer.encode("<|endoftext|>")[0]
         for i in range(max_length):
             logits = model(prompts_batch)
             next_token_logits = logits[:, -1, :]
-            next_token_ids = torch.argmax(next_token_logits, dim=-1)
+            next_token_ids = torch.multinomial(softmax(next_token_logits / temperature), num_samples=1).squeeze(-1)
+            next_token_ids[ended] = tokenizer.pad_token_id
+            # next_tokens[:, i*2] = tokenizer.encode(',')[0]
+            # next_tokens[:, i*2+1] = next_token_ids
             next_tokens[:, i] = next_token_ids
+            ended = ended | (next_token_ids == endoftext_tok)
+            if torch.all(ended):
+                break
             prompts_batch = torch.cat((prompts_batch, next_token_ids[..., None]), dim=1)
         return [tokenizer.decode(token_ids.tolist()) for token_ids in next_tokens]

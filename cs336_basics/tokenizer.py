@@ -78,18 +78,18 @@ class Tokenizer:
     pad_token_id: ClassVar[int] = 0
 
     def __post_init__(self):
-        next_vocab_index = max(self.vocab.keys())
         # in case some special tokens are substrings of other special tokens,
         # sort by length descending so we match the longest one first
         super().__setattr__(
             "special_tokens",
             sorted(self.special_tokens or [], key=lambda s: (len(s), s), reverse=True),
         )
-        special_vocab = {
-            i + next_vocab_index: tok.encode("utf-8")
-            for i, tok in enumerate(self.special_tokens or [])
-        }
-        super().__setattr__("dec", self.vocab | special_vocab)
+        # next_vocab_index = max(self.vocab.keys())
+        # special_vocab = {
+        #     next_vocab_index + i: tok.encode("utf-8")
+        #     for i, tok in enumerate(self.special_tokens or [])
+        # }
+        super().__setattr__("dec", self.vocab)
         super().__setattr__("enc", {b: i for i, b in self.vocab.items()})
 
     @classmethod

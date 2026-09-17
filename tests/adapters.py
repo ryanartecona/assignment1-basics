@@ -433,6 +433,9 @@ def run_transformer_lm(
         context_length=context_length,
     )
     state_map = {
+        "hyper": torch.tensor(
+            [vocab_size, d_model, num_layers, num_heads, d_ff, rope_theta, context_length], dtype=torch.float32
+        ),
         "token_embeddings.weights": weights["token_embeddings.weight"],
         "ln_final.gain": weights["ln_final.weight"],
         "lm_out.w": weights["lm_head.weight"],
@@ -510,7 +513,7 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    return get_batch(dataset, batch_size, context_length, device) 
+    return get_batch(dataset, batch_size, context_length, device)
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:

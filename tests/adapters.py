@@ -490,7 +490,8 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    raise NotImplementedError
+    x = in_features
+    return torch.sigmoid(x) * x
 
 
 def run_get_batch(

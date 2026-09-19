@@ -131,12 +131,11 @@ def init(codec_path, model_path, d_model, n_layers, context_length, d_ff, n_head
     click.echo(f"Model saved to {model_path}")
 
 
-# TODO: take the model init stuff out of this, so init is separate from a train step
 @cli.command()
 @click.option("--codec-path", required=True, help="Path to the trained tokenizer codec.", type=readable_file)
 @click.option("--corpus-path", required=True, help="Path to the training corpus.", type=readable_file)
 @click.option("--model-path", required=True, help="Path to load the starting checkpoint.", type=readable_file)
-@click.option("--steps", default=100, help="Number of training steps.")
+@click.option("--steps", default=100, help="Total number of training steps.")
 @click.option("--warmup-steps", default=10, help="Number of steps in initial warmup period.")
 @click.option("--checkpoint-every", default=1000, help="How many steps between saving new checkpoints.")
 @click.option(
@@ -157,14 +156,15 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
     iter = cp["iteration"]
     click.echo("Model and optimizer loaded.")
     click.echo("Training commencing...")
+    training_loss = cp.get("training_loss", torch.zeros([steps]))
     model.train()
 
     def save_new_checkpoint(model, optimizer, iteration, model_path):
-        checkpoint_path = model_path.with_stem(f"{model_path}.step{iteration}")
-        save_checkpoint(model, optimizer, iteration=iteration, out=checkpoint_path)
+        checkpoint_path = model_path.with_stem(f"{model_path.stem}.step{iteration}")
+        save_checkpoint(model, optimizer, iteration, out=checkpoint_path, training_loss=training_loss)
         click.echo(f"Saved checkpoint at step {iteration} to {checkpoint_path}")
 
-    for i in range(iter, iter + steps):
+    for i in range(iter, steps):
         if i % checkpoint_every == 0:
             save_new_checkpoint(model, optimizer, i, model_path)
         batch_x, batch_y = get_batch(
@@ -172,6 +172,7 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
         )
         logits = model.forward(batch_x)
         loss = cross_entropy_loss(logits, batch_y)
+        training_loss[i] = loss.mean().item()
         loss.backward()
         lr = lr_schedule_cosine_annealing(
             i, lr_max=1e-2, lr_min=5e-4, warmup_period=warmup_steps, annealing_period=steps
@@ -180,7 +181,7 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
             param_group["lr"] = lr
         optimizer.step()
         optimizer.zero_grad()
-        click.echo(f"Step {i + 1}/10 completed. loss: {loss.mean().item():0.5f}, lr: {lr:0.3e}")
+        click.echo(f"Step {i + 1}/{steps} completed. loss: {training_loss[i]:0.5f}, lr: {lr:0.3e}")
     save_new_checkpoint(model, optimizer, iter + steps, model_path)
     click.echo("Test completions after training:")
     prompt = "Once upon a time"

@@ -1,7 +1,7 @@
 import math
 from collections.abc import Callable, Iterable
 from os import PathLike
-from typing import IO, Any, BinaryIO, TypedDict
+from typing import IO, Any, BinaryIO, NotRequired, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -446,16 +446,23 @@ class Checkpoint(TypedDict):
     model: dict
     optimizer: dict
     iteration: int
+    training_loss: NotRequired[torch.Tensor]
 
 
 def save_checkpoint(
-    model: nn.Module, optimizer: optim.Optimizer, iteration: int, out: str | PathLike | BinaryIO | IO[bytes]
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    iteration: int,
+    out: str | PathLike | BinaryIO | IO[bytes],
+    training_loss: torch.Tensor | None = None,
 ):
     pack: Checkpoint = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "iteration": iteration,
     }
+    if training_loss is not None:
+        pack['training_loss'] = training_loss
     torch.save(pack, out)
 
 
@@ -486,7 +493,7 @@ def complete(
             ],
             dim=0,
         )
-        next_tokens = torch.zeros((len(prompts), max_length*2), dtype=torch.int32, device=device)
+        next_tokens = torch.zeros((len(prompts), max_length * 2), dtype=torch.int32, device=device)
         # next_tokens = torch.zeros((len(prompts), max_length*2), dtype=torch.int32, device=device)
         ended = torch.zeros((len(prompts),), dtype=torch.bool, device=device)
         # print("eot token:", tokenizer.encode("<|endoftext|>"))

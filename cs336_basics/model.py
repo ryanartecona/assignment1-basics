@@ -11,6 +11,7 @@ from einops.einops import einsum, reduce, repeat
 from jaxtyping import Float, Int
 from torch import nn, optim
 from torch.nn import functional as F
+from tqdm.auto import tqdm
 
 from cs336_basics.tokenizer import Tokenizer
 
@@ -447,7 +448,7 @@ def get_validation_loss(
     model.eval()
     ys_count = (len(dataset)-1) // context_length
     loss_running_mean = 0.0
-    for i in range(0, len(dataset)-1, batch_size * context_length):
+    for i in tqdm(range(0, len(dataset)-1, batch_size * context_length), desc='validation pass'):
         end = min(len(dataset)-1, i+(batch_size * context_length))
         num_full_batches = (end - i) // context_length
         xs_np = dataset[i : i + num_full_batches * context_length].reshape(-1, context_length)

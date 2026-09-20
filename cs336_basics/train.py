@@ -3,6 +3,7 @@ from pprint import pformat
 
 import click
 import numpy as np
+from tqdm.auto import tqdm
 
 from pathlib import Path
 
@@ -151,6 +152,7 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
     click.echo("Loading model and optimizer...")
     cp: Checkpoint = torch.load(model_path, mmap=True)
     model = TransformerLM.from_state_dict(cp["model"])
+    model = torch.compile(model)
     optimizer = AdamW(model.parameters())
     optimizer.load_state_dict(cp["optimizer"])
     iter = cp["iteration"]
@@ -165,7 +167,7 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
         save_checkpoint(model, optimizer, iteration, out=checkpoint_path, training_loss=training_loss, lr=lrs)
         click.echo(f"Saved checkpoint at step {iteration} to {checkpoint_path}")
 
-    for i in range(iter, steps):
+    for i in tqdm(range(iter, steps)):
         if i % checkpoint_every == 0:
             save_new_checkpoint(model, optimizer, i, model_path)
         batch_x, batch_y = get_batch(
@@ -176,14 +178,15 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
         training_loss[i] = loss.mean().item()
         loss.backward()
         lr = lr_schedule_cosine_annealing(
-            i, lr_max=1e-2, lr_min=5e-4, warmup_period=warmup_steps, annealing_period=steps
+            i, lr_max=6e-3, lr_min=1e-5, warmup_period=warmup_steps, annealing_period=steps
         )
         lrs[i] = lr
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
         optimizer.step()
         optimizer.zero_grad()
-        click.echo(f"Step {i + 1}/{steps} completed. loss: {training_loss[i]:0.5f}, lr: {lr:0.3e}")
+        if i % (checkpoint_every // 10) == 0:
+            click.echo(f"Step {i + 1}/{steps} completed. loss: {training_loss[i]:0.5f}, lr: {lr:0.3e}")
     save_new_checkpoint(model, optimizer, iter + steps, model_path)
     click.echo("Test completions after training:")
     prompt = "Once upon a time"

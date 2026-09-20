@@ -103,10 +103,10 @@ def tokenizer_encode_dataset(codec_path: Path, corpus_path: Path, special_tokens
 @click.option("--codec-path", required=True, help="Path to the trained tokenizer codec.", type=readable_file)
 @click.option("--model-path", required=True, help="Path to write the initial checkpoint.", type=writable_file)
 @click.option("--d-model", default=512, help="Dimension of the model.")
-@click.option("--n-layers", default=6, help="Number of layers in the model.")
-@click.option("--context-length", default=128, help="Context length for the model.")
-@click.option("--d-ff", default=2048, help="Dimension of the feedforward network.")
-@click.option("--n-heads", default=8, help="Number of attention heads in the feedforward network.")
+@click.option("--n-layers", default=4, help="Number of layers in the model.")
+@click.option("--context-length", default=256, help="Context length for the model.")
+@click.option("--d-ff", default=1344, help="Dimension of the feedforward network.")
+@click.option("--n-heads", default=16, help="Number of attention heads in the feedforward network.")
 @click.option("--rope-theta", default=10000, help="RoPE theta value.")
 def init(codec_path, model_path, d_model, n_layers, context_length, d_ff, n_heads, rope_theta):
     """Initialize a model with provided config."""

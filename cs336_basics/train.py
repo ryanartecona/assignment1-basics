@@ -38,8 +38,8 @@ def tokenizer():
 
 @tokenizer.command(name="train")
 @click.option("--vocab-size", default=10000, help="Vocabulary size for the tokenizer.")
-@click.option("--corpus-path", default=None, help="Path to the training corpus.", type=readable_file)
-@click.option("--output-path", default=None, help="Path to save the trained tokenizer.", type=writable_file)
+@click.option("--corpus-path", required=True, help="Path to the training corpus.", type=readable_file)
+@click.option("--output-path", required=True, help="Path to save the trained tokenizer.", type=writable_file)
 @click.option(
     "--special-tokens", default=["<|endoftext|>"], help="Special tokens to include in the tokenizer.", multiple=True
 )
@@ -133,7 +133,7 @@ def init(codec_path, model_path, d_model, n_layers, context_length, d_ff, n_head
 
 @cli.command()
 @click.option("--codec-path", required=True, help="Path to the trained tokenizer codec.", type=readable_file)
-@click.option("--corpus-path", required=True, help="Path to the training corpus.", type=readable_file)
+@click.option("--corpus-path", required=True, help="Path to the training corpus, pre-encoded.", type=readable_file)
 @click.option("--model-path", required=True, help="Path to load the starting checkpoint.", type=readable_file)
 @click.option("--steps", default=100, help="Total number of training steps.")
 @click.option("--warmup-steps", default=10, help="Number of steps in initial warmup period.")
@@ -145,7 +145,7 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
     """Train a model with provided config."""
     click.echo("Loading tokenizer codec...")
     tokenizer = Tokenizer.from_file(codec_path, special_tokens=special_tokens)
-    corpus_toks = np.memmap(dtype=np.uint16, filename=corpus_path, mode="r")
+    corpus_toks = np.load(corpus_path, mmap_mode="r")
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.set_default_device(device)
     click.echo("Loading model and optimizer...")
@@ -157,11 +157,12 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
     click.echo("Model and optimizer loaded.")
     click.echo("Training commencing...")
     training_loss = cp.get("training_loss", torch.zeros([steps]))
+    lrs = cp.get('lr', torch.zeros([steps], dtype=torch.float16))
     model.train()
 
     def save_new_checkpoint(model, optimizer, iteration, model_path):
         checkpoint_path = model_path.with_stem(f"{model_path.stem}.step{iteration}")
-        save_checkpoint(model, optimizer, iteration, out=checkpoint_path, training_loss=training_loss)
+        save_checkpoint(model, optimizer, iteration, out=checkpoint_path, training_loss=training_loss, lr=lrs)
         click.echo(f"Saved checkpoint at step {iteration} to {checkpoint_path}")
 
     for i in range(iter, steps):
@@ -177,6 +178,7 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
         lr = lr_schedule_cosine_annealing(
             i, lr_max=1e-2, lr_min=5e-4, warmup_period=warmup_steps, annealing_period=steps
         )
+        lrs[i] = lr
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
         optimizer.step()
@@ -188,6 +190,16 @@ def train(codec_path, corpus_path, model_path, steps, warmup_steps, checkpoint_e
     completions = complete(model, tokenizer=tokenizer, prompts=[prompt] * 5, max_length=100, temperature=0.95)
     click.echo(f"  {prompt}")
     click.echo("\n".join([f"  ...{completion}" for completion in completions]))
+
+
+# def validate(codec_path, corpus_path, model_path, special_tokens):
+#     click.echo("Loading tokenizer codec...")
+#     tokenizer = Tokenizer.from_file(codec_path, special_tokens=special_tokens)
+#     corpus_toks = np.load(corpus_path, mmap_mode="r")
+#     click.echo("Loading model and optimizer...")
+#     cp: Checkpoint = torch.load(model_path, mmap=True)
+#     model = TransformerLM.from_state_dict(cp["model"])
+
 
 
 if __name__ == "__main__":

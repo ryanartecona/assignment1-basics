@@ -441,12 +441,32 @@ def get_batch(
     return xs, ys
 
 
+def get_validation_loss(
+    model: TransformerLM, dataset: npt.NDArray, batch_size: int, context_length: int, device: str
+) -> float:
+    model.eval()
+    ys_count = (len(dataset)-1) // context_length
+    loss_running_mean = 0.0
+    for i in range(0, len(dataset)-1, batch_size * context_length):
+        end = min(len(dataset)-1, i+(batch_size * context_length))
+        num_full_batches = (end - i) // context_length
+        xs_np = dataset[i : i + num_full_batches * context_length].reshape(-1, context_length)
+        ys_np = dataset[i + 1 : i + num_full_batches * context_length + 1].reshape(-1, context_length)
+        xs = torch.from_numpy(xs_np.copy()).to(device, dtype=torch.int32)
+        ys = torch.from_numpy(ys_np.copy()).to(device, dtype=torch.int32)
+        logits = model.forward(xs)
+        losses = cross_entropy_loss(logits, ys)
+        loss_running_mean += losses.sum().item() * batch_size / ys_count
+    return loss_running_mean
+
+
 # Section 5.2 - checkpointing
 class Checkpoint(TypedDict):
     model: dict
     optimizer: dict
     iteration: int
     training_loss: NotRequired[torch.Tensor]
+    lr: NotRequired[torch.Tensor]
 
 
 def save_checkpoint(
@@ -455,6 +475,7 @@ def save_checkpoint(
     iteration: int,
     out: str | PathLike | BinaryIO | IO[bytes],
     training_loss: torch.Tensor | None = None,
+    lr: torch.Tensor | None = None,
 ):
     pack: Checkpoint = {
         "model": model.state_dict(),
@@ -462,7 +483,9 @@ def save_checkpoint(
         "iteration": iteration,
     }
     if training_loss is not None:
-        pack['training_loss'] = training_loss
+        pack["training_loss"] = training_loss
+    if lr is not None:
+        pack['lr'] = lr
     torch.save(pack, out)
 
 

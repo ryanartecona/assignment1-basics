@@ -55,7 +55,6 @@ class Embedding(nn.Module):
     ):
         super().__init__()
         weights = torch.zeros([vocab_size, d_model], device=device, dtype=dtype)
-        # NOTE init by truncated normal distribution not yet verified correct
         nn.init.trunc_normal_(weights, mean=0, std=1, a=-3, b=3)
         self.weights = nn.Parameter(weights)
 
@@ -111,8 +110,11 @@ class SwiGLU(nn.Module):
         # TODO: init d_ff to be 8/3 of d_model, rounded to nearest 64 multiple
         # (requires making d_ff optional)
         self.w1 = nn.Parameter(torch.ones([d_ff, d_model], device=device, dtype=dtype))
+        nn.init.trunc_normal_(self.w1, mean=0, std=1, a=-3, b=3)
         self.w2 = nn.Parameter(torch.ones([d_model, d_ff], device=device, dtype=dtype))
+        nn.init.trunc_normal_(self.w2, mean=0, std=1, a=-3, b=3)
         self.w3 = nn.Parameter(torch.ones([d_ff, d_model], device=device, dtype=dtype))
+        nn.init.trunc_normal_(self.w3, mean=0, std=1, a=-3, b=3)
 
     def forward(self, x: Float[torch.Tensor, "... d_model"]) -> Float[torch.Tensor, "... d_model"]:
         # SwiGLU(x, W1, W2, W3) = W2 @ (SiLU(W1 @ x) * W3 @ x)
@@ -326,13 +328,18 @@ class TransformerLM(nn.Module):
 
     @classmethod
     def from_state_dict(cls, state: dict[str, torch.Tensor]):
-        vocab_size = int(state["hyper"][0])
-        d_model = int(state["hyper"][1])
-        n_heads = int(state["hyper"][2])
-        d_ff = int(state["hyper"][3])
-        n_layers = int(state["hyper"][4])
-        rope_theta = float(state["hyper"][5])
-        context_length = int(state["hyper"][6])
+        # if the model was saved as compiled, state dict keys all have
+        # '_orig_mod.' prefix; strip those first
+        state = {k.lstrip('_orig_mod.'): v for k, v in state.items()}
+
+        hyper = state["hyper"]
+        vocab_size = int(hyper[0])
+        d_model = int(hyper[1])
+        n_heads = int(hyper[2])
+        d_ff = int(hyper[3])
+        n_layers = int(hyper[4])
+        rope_theta = float(hyper[5])
+        context_length = int(hyper[6])
 
         # https://docs.pytorch.org/tutorials/recipes/recipes/module_load_state_dict_tips.html
         with torch.device("meta"):
@@ -446,10 +453,10 @@ def get_validation_loss(
     model: TransformerLM, dataset: npt.NDArray, batch_size: int, context_length: int, device: str
 ) -> float:
     model.eval()
-    ys_count = (len(dataset)-1) // context_length
+    ys_count = (len(dataset) - 1) // context_length
     loss_running_mean = 0.0
-    for i in tqdm(range(0, len(dataset)-1, batch_size * context_length), desc='validation pass'):
-        end = min(len(dataset)-1, i+(batch_size * context_length))
+    for i in tqdm(range(0, len(dataset) - 1, batch_size * context_length), desc="validation pass"):
+        end = min(len(dataset) - 1, i + (batch_size * context_length))
         num_full_batches = (end - i) // context_length
         xs_np = dataset[i : i + num_full_batches * context_length].reshape(-1, context_length)
         ys_np = dataset[i + 1 : i + num_full_batches * context_length + 1].reshape(-1, context_length)
@@ -486,7 +493,7 @@ def save_checkpoint(
     if training_loss is not None:
         pack["training_loss"] = training_loss
     if lr is not None:
-        pack['lr'] = lr
+        pack["lr"] = lr
     torch.save(pack, out)
 
 
